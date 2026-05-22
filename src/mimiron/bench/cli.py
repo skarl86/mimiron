@@ -50,11 +50,27 @@ def cmd_run(args: argparse.Namespace) -> int:
     if os.environ.get("MIMIRON_BENCH_DRY_RUN") == "1":
         print(json.dumps({"id": b.id, "status": "deferred", "reason": "dry-run"}))
         return 0
+    similarity_provider = None
+    judge_path_str = getattr(args, "similarity_from", None)
+    if judge_path_str:
+        from mimiron.bench.judge import JudgeError, load_similarity_from_file
+        judge_path = Path(judge_path_str)
+        if not judge_path.is_absolute():
+            judge_path = (cwd / judge_path).resolve()
+        try:
+            similarity_provider = load_similarity_from_file(judge_path)
+        except (JudgeError, FileNotFoundError) as e:
+            print(f"error: judge file: {e}", file=sys.stderr)
+            return 2
     work_root = cwd / ".mimiron" / "_bench"
     work_root.mkdir(parents=True, exist_ok=True)
     try:
         from mimiron.bench.runner import run_benchmark
-        v = run_benchmark(benchmark=b, work_root=work_root, similarity_provider=None)
+        v = run_benchmark(
+            benchmark=b,
+            work_root=work_root,
+            similarity_provider=similarity_provider,
+        )
     except Exception as e:
         print(json.dumps({"id": b.id, "status": "failed", "error": str(e)}))
         return 4
@@ -121,6 +137,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run")
     p_run.add_argument("id")
+    p_run.add_argument(
+        "--similarity-from",
+        dest="similarity_from",
+        default=None,
+        help="외부에서 미리 산출한 judge JSON 경로 (score+rationale).",
+    )
     p_run.set_defaults(func=cmd_run)
 
     p_cmp = sub.add_parser("compare")

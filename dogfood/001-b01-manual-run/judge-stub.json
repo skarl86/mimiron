@@ -1,0 +1,4 @@
+{
+  "score": 0.85,
+  "rationale": "iteration 1 stub — fixed 0.85 to validate the file-backed judge path end-to-end. Replace with real Claude-as-judge output once skill exists."
+}
