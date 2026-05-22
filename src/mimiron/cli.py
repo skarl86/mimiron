@@ -10,12 +10,16 @@ from mimiron.state import State
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
+EXIT_OK = 0
+EXIT_RUNTIME_ERROR = 1
+EXIT_USAGE_ERROR = 2
+
 
 def _sidecar_dir(cwd: Path, slug: str) -> Path:
     return cwd / ".mimiron" / slug
 
 
-def _validate_slug(slug: str) -> None:
+def _check_slug_or_die(slug: str) -> None:
     if not SLUG_RE.match(slug):
         raise SystemExit(
             f"invalid slug {slug!r}: must match {SLUG_RE.pattern} "
@@ -24,17 +28,17 @@ def _validate_slug(slug: str) -> None:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    _validate_slug(args.slug)
+    _check_slug_or_die(args.slug)
     cwd = Path.cwd()
     sidecar = _sidecar_dir(cwd, args.slug)
     if sidecar.exists():
         print(f"error: slug {args.slug!r} already exists at {sidecar}", file=sys.stderr)
-        return 2
+        return EXIT_RUNTIME_ERROR
     sidecar.mkdir(parents=True)
     state = State.create(slug=args.slug, persistent=not args.no_persist)
     state.save(sidecar / "state.json")
     print(f"initialized {args.slug} at {sidecar}")
-    return 0
+    return EXIT_OK
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,12 +57,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        return int(args.func(args))
+        rc = args.func(args)
     except SystemExit as exc:
         msg = str(exc)
         if msg:
             print(msg, file=sys.stderr)
-        return 1
+        return EXIT_USAGE_ERROR
+    # M3: guard against subcommands that forget to `return`
+    return int(rc) if rc is not None else EXIT_OK
 
 
 if __name__ == "__main__":
