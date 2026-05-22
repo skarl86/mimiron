@@ -1,5 +1,4 @@
 """공용 pytest fixture."""
-import os
 import pytest
 from pathlib import Path
 
