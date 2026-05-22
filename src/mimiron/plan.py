@@ -28,6 +28,10 @@ class Task:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Task":
+        if "id" not in d:
+            raise PlanError("task missing required field 'id'")
+        if "title" not in d:
+            raise PlanError(f"task {d['id']!r} missing required field 'title'")
         worker = d.get("worker", "worker")
         if worker not in VALID_WORKERS:
             raise PlanError(f"invalid worker {worker!r} in task {d.get('id')}")
@@ -52,9 +56,16 @@ class Plan:
     @classmethod
     def load(cls, path: Path) -> "Plan":
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if raw is None:
+            raise PlanError("plan.yaml is empty")
+        if not isinstance(raw, dict):
+            raise PlanError(f"plan.yaml root must be a mapping, got {type(raw).__name__}")
         sv = raw.get("schema_version")
         if sv != SCHEMA_VERSION:
             raise PlanError(f"schema_version mismatch: {sv} != {SCHEMA_VERSION}")
+        for field in ("slug", "spec_hash", "tasks"):
+            if field not in raw:
+                raise PlanError(f"plan.yaml missing required field {field!r}")
         return cls(
             schema_version=sv,
             slug=raw["slug"],

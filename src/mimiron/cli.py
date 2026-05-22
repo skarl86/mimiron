@@ -288,6 +288,20 @@ def cmd_commit_task(args: argparse.Namespace) -> int:
         print(f"error: slug {args.slug!r} not initialized", file=sys.stderr)
         return EXIT_RUNTIME_ERROR
     state = State.load(state_path)
+    if state.spec_hash is not None and not state.spec_unlocked:
+        spec_path = sidecar / "spec.yaml"
+        if spec_path.exists():
+            current_hash = Spec.compute_hash(spec_path)
+            if current_hash != state.spec_hash:
+                state.phase = "stuck"
+                state.save(state_path)
+                print(
+                    f"spec_hash mismatch: spec.yaml={current_hash[:8]}, "
+                    f"state.spec_hash={state.spec_hash[:8]}. "
+                    "Run unstuck to recover.",
+                    file=sys.stderr,
+                )
+                return EXIT_RUNTIME_ERROR
     art_path = sidecar / "tasks" / args.task_id / "artifacts.json"
     if not art_path.exists():
         print(f"error: artifacts.json missing at {art_path}", file=sys.stderr)
