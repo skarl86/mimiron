@@ -1,0 +1,13 @@
+id: B01-welcome-message-fix
+repo: ../../.bench-clones/workspace
+base_ref: df726371a9ed
+target_ref: 0473b1c015b5
+issue_text_file: issue.md
+expected_diff_file: expected.diff
+test_command: 'python3 -c "import sys; s=open(''agents/naver-smartstore/app/services/daily_access_tracker.py'').read(); sys.exit(0 if ''\"source\"'' not in s else 1)"'
+difficulty: easy
+notes: |
+  원본 PR: ts-cxdm/workspace#1299 — fix(naver-smartstore): 웰컴 메시지 미발송 버그 수정
+  base→target 사이 변경: 2개 파일 (-2 prod, -1 test)
+  test_command 전략: 실제 pytest 대신 *fix 적용 여부 확인*용 grep
+  (의존성 풀-인스톨 회피, deferred 모드에서 인프라 종주만 검증)

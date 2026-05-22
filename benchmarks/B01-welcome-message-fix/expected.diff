@@ -1,0 +1,33 @@
+diff --git a/agents/naver-smartstore/app/services/daily_access_tracker.py b/agents/naver-smartstore/app/services/daily_access_tracker.py
+index ea49682b..26b9defb 100644
+--- a/agents/naver-smartstore/app/services/daily_access_tracker.py
++++ b/agents/naver-smartstore/app/services/daily_access_tracker.py
+@@ -45,7 +45,6 @@ class DailyAccessTracker:
+                 .select("user_id")
+                 .eq("user_id", user_id)
+                 .eq("access_date", today)
+-                .eq("source", "naver-smartstore")
+                 .limit(1)
+                 .execute()
+             )
+@@ -61,7 +60,6 @@ class DailyAccessTracker:
+                     "user_id": user_id,
+                     "access_date": today,
+                     "first_access_at": kst_now.isoformat(),
+-                    "source": "naver-smartstore",
+                 })
+                 .execute()
+             )
+diff --git a/agents/naver-smartstore/tests/test_daily_access_tracker.py b/agents/naver-smartstore/tests/test_daily_access_tracker.py
+index 65cc89cd..26cef6dd 100644
+--- a/agents/naver-smartstore/tests/test_daily_access_tracker.py
++++ b/agents/naver-smartstore/tests/test_daily_access_tracker.py
+@@ -52,7 +52,7 @@ def test_first_access_returns_true() -> None:
+     select_chain.execute.return_value = select_result
+     
+     insert_result = MagicMock()
+-    insert_result.data = [{"user_id": "user_A", "source": "naver-smartstore"}]
++    insert_result.data = [{"user_id": "user_A"}]
+     insert_chain = MagicMock()
+     insert_chain.insert.return_value = insert_chain
+     insert_chain.execute.return_value = insert_result
