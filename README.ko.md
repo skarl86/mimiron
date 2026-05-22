@@ -32,8 +32,10 @@ Claude Code 세션에서:
 
 ```
 /plugin marketplace add skarl86/mimiron
-/plugin install mimiron@skarl86-mimiron
+/plugin install mimiron@mimiron
 ```
+
+(`@mimiron` 접미는 *마켓플레이스 별칭* — `.claude-plugin/marketplace.json`의 `name` field와 일치하며, 우연히 plugin 이름과 같다. 시각적인 중복이지 오타가 아님.)
 
 설치는 이걸로 끝. `/mimiron`, `/mimiron-status`, `/mimiron-resume`, `/mimiron-pause`, `/mimiron-unstuck` 슬래시 명령과 함께 8 skills + 3 worker agents + 3 hooks(SessionStart / Stop / PostToolUse drift) 모두 활성화된다.
 

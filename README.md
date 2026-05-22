@@ -32,8 +32,10 @@ In any Claude Code session:
 
 ```
 /plugin marketplace add skarl86/mimiron
-/plugin install mimiron@skarl86-mimiron
+/plugin install mimiron@mimiron
 ```
+
+(The `@mimiron` suffix is the marketplace alias — it matches the `name` field in `.claude-plugin/marketplace.json` and happens to coincide with the plugin name. The duplication is visual, not a typo.)
 
 That's it for the plugin install — `/mimiron`, `/mimiron-status`, `/mimiron-resume`, `/mimiron-pause`, and `/mimiron-unstuck` slash commands are now live, along with the 8 skills, 3 worker agents, and 3 hooks (SessionStart / Stop / PostToolUse drift).
 
