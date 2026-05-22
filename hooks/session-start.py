@@ -8,11 +8,18 @@ Claude Code의 SessionStart event는 stdin 없이도 발동. 본 hook은 cwd/.mi
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 
 HIDDEN_PHASES = frozenset({"done", "stuck", "paused"})
+
+
+def _project_root() -> Path:
+    """Claude Code가 주입하는 CLAUDE_PROJECT_DIR 우선, 미설정 시 cwd."""
+    env = os.environ.get("CLAUDE_PROJECT_DIR")
+    return Path(env) if env else Path.cwd()
 
 
 def collect_in_progress(mimiron_dir: Path) -> list[dict[str, object]]:
@@ -57,8 +64,7 @@ def render_context(in_progress: list[dict[str, object]]) -> str:
 
 
 def main() -> int:
-    cwd = Path.cwd()
-    in_progress = collect_in_progress(cwd / ".mimiron")
+    in_progress = collect_in_progress(_project_root() / ".mimiron")
     if not in_progress:
         return 0
     output = {

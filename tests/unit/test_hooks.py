@@ -254,3 +254,49 @@ def test_post_toolwrite_outside_cwd_is_ignored(
         mimiron_dir=md, cwd=tmp_path, edited_abs_path=Path("/etc/passwd"),
     )
     assert drifts == []
+
+
+# ─────── CLAUDE_PROJECT_DIR env var routing (defect-fix from session 7ee14442) ───────
+
+
+def test_session_start_uses_claude_project_dir_env(
+    tmp_path: Path, session_start, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Claude Code가 hook 실행 시 cwd가 어디든, CLAUDE_PROJECT_DIR이 정답."""
+    md = tmp_path / ".mimiron"
+    s = md / "demo"
+    s.mkdir(parents=True)
+    (s / "state.json").write_text(
+        json.dumps({"schema_version": 1, "slug": "demo", "phase": "execute", "persistent": True})
+    )
+    # chdir을 *다른 곳*으로 (Claude Code가 user의 home에서 실행하는 케이스 시뮬레이션)
+    other_dir = tmp_path.parent / "totally-unrelated-cwd"
+    other_dir.mkdir(exist_ok=True)
+    monkeypatch.chdir(other_dir)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    # _project_root()이 env var를 우선해야
+    assert session_start._project_root() == tmp_path
+
+
+def test_stop_hook_uses_claude_project_dir_env(
+    tmp_path: Path, stop_hook, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path.parent)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    assert stop_hook._project_root() == tmp_path
+
+
+def test_post_toolwrite_uses_claude_project_dir_env(
+    tmp_path: Path, post_toolwrite, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path.parent)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    assert post_toolwrite._project_root() == tmp_path
+
+
+def test_project_root_falls_back_to_cwd_when_env_missing(
+    tmp_path: Path, session_start, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert session_start._project_root() == tmp_path

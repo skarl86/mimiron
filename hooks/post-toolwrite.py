@@ -6,12 +6,19 @@ v0: warn + drift.log에 append. v1+: reject (decision="block" with rejection rea
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 
 WATCHED_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
+
+
+def _project_root() -> Path:
+    """Claude Code가 주입하는 CLAUDE_PROJECT_DIR 우선, 미설정 시 cwd."""
+    env = os.environ.get("CLAUDE_PROJECT_DIR")
+    return Path(env) if env else Path.cwd()
 
 
 def _read_event() -> dict[str, object]:
@@ -91,19 +98,19 @@ def main() -> int:
     raw_path = tool_input.get("file_path") if isinstance(tool_input, dict) else None
     if not raw_path or not isinstance(raw_path, str):
         return 0
-    cwd = Path.cwd()
+    project = _project_root()
     edited = Path(raw_path)
     if not edited.is_absolute():
-        edited = cwd / edited
+        edited = project / edited
     drifts = detect_drift(
-        mimiron_dir=cwd / ".mimiron",
-        cwd=cwd,
+        mimiron_dir=project / ".mimiron",
+        cwd=project,
         edited_abs_path=edited,
     )
     if not drifts:
         return 0
     for slug, rel in drifts:
-        append_drift_log(cwd / ".mimiron", slug, rel)
+        append_drift_log(project / ".mimiron", slug, rel)
     # v0: warn-only — additionalContext로 알리고 작업은 통과시킴
     first_slug, first_rel = drifts[0]
     output = {

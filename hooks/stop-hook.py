@@ -11,9 +11,16 @@ wall_clock/token cap 미초과 → decision="block" + reason 으로 Claude를
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _project_root() -> Path:
+    """Claude Code가 주입하는 CLAUDE_PROJECT_DIR 우선, 미설정 시 cwd."""
+    env = os.environ.get("CLAUDE_PROJECT_DIR")
+    return Path(env) if env else Path.cwd()
 
 
 HIDDEN_PHASES = frozenset({"done", "stuck", "paused"})
@@ -112,8 +119,7 @@ def find_resume_target(mimiron_dir: Path) -> tuple[str, str] | None:
 
 
 def main() -> int:
-    cwd = Path.cwd()
-    target = find_resume_target(cwd / ".mimiron")
+    target = find_resume_target(_project_root() / ".mimiron")
     if target is None:
         return 0
     slug, phase = target

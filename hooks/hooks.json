@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PROJECT_DIR}/hooks/session-start.py"
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.py"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PROJECT_DIR}/hooks/stop-hook.py"
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/stop-hook.py"
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PROJECT_DIR}/hooks/post-toolwrite.py"
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/post-toolwrite.py"
           }
         ]
       }
