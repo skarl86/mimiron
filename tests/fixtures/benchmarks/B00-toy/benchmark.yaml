@@ -1,0 +1,9 @@
+id: B00-toy
+repo: ./toy_repo
+base_ref: HEAD~1
+target_ref: HEAD
+issue_text_file: issue.md
+expected_diff_file: expected.diff
+test_command: "echo ok"
+difficulty: easy
+notes: "smoke fixture only"

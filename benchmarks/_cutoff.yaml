@@ -1,0 +1,6 @@
+schema_version: 1
+cutoff_case: 0.75
+cutoff_global: 0.75
+w_test: 0.6
+w_sim: 0.4
+certainty_band: 0.05
