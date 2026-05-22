@@ -44,19 +44,25 @@ def cmd_run(args: argparse.Namespace) -> int:
     cwd = Path.cwd()
     bench_dir = cwd / "benchmarks" / args.id
     if not (bench_dir / "benchmark.yaml").exists():
-        print(f"error: benchmark {args.id!r} not found at {bench_dir}", file=sys.stderr)
+        print(f"error: benchmark {args.id!r} not found", file=sys.stderr)
         return 2
-    try:
-        b = Benchmark.load(bench_dir / "benchmark.yaml")
-    except BenchmarkError as e:
-        print(f"benchmark invalid: {e}", file=sys.stderr)
-        return 3
+    b = Benchmark.load(bench_dir / "benchmark.yaml")
     if os.environ.get("MIMIRON_BENCH_DRY_RUN") == "1":
-        result = {"id": b.id, "status": "deferred", "reason": "dry-run mode"}
-        print(json.dumps(result, indent=2))
+        print(json.dumps({"id": b.id, "status": "deferred", "reason": "dry-run"}))
         return 0
-    print(json.dumps({"id": b.id, "status": "pending", "reason": "runner not implemented yet"}))
-    return 0
+    work_root = cwd / ".mimiron" / "_bench"
+    work_root.mkdir(parents=True, exist_ok=True)
+    try:
+        from mimiron.bench.runner import run_benchmark
+        v = run_benchmark(benchmark=b, work_root=work_root, similarity_provider=None)
+    except Exception as e:
+        print(json.dumps({"id": b.id, "status": "failed", "error": str(e)}))
+        return 4
+    status_dir = cwd / ".mimiron" / "_outer" / "status"
+    status_dir.mkdir(parents=True, exist_ok=True)
+    (status_dir / f"{b.id}.json").write_text(json.dumps(dict(v), indent=2))
+    print(json.dumps(dict(v), indent=2))
+    return 0 if v["status"] != "failed" else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
