@@ -2,7 +2,6 @@
 import shutil
 import subprocess
 from pathlib import Path
-import pytest
 
 MIMIRON_BIN = shutil.which("mimiron") or str(
     (Path(__file__).parent.parent.parent / ".venv" / "bin" / "mimiron").resolve()
