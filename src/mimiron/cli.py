@@ -7,6 +7,7 @@ import re
 import sys
 from pathlib import Path
 
+from mimiron.artifacts import Artifacts, ArtifactError
 from mimiron.gates import run_mechanical_gate
 from mimiron.plan import Plan, PlanError
 from mimiron.scanner import scan as run_scan
@@ -156,6 +157,38 @@ def cmd_gate(args: argparse.Namespace) -> int:
     return EXIT_OK if v.verdict != "fail" else EXIT_RUNTIME_ERROR
 
 
+def cmd_commit_task(args: argparse.Namespace) -> int:
+    cwd = Path.cwd()
+    sidecar = _sidecar_dir(cwd, args.slug)
+    state_path = sidecar / "state.json"
+    if not state_path.exists():
+        print(f"error: slug {args.slug!r} not initialized", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+    state = State.load(state_path)
+    art_path = sidecar / "tasks" / args.task_id / "artifacts.json"
+    if not art_path.exists():
+        print(f"error: artifacts.json missing at {art_path}", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+    try:
+        art = Artifacts.load(art_path)
+        art.verify(root=cwd)
+    except ArtifactError as e:
+        state.retries[args.task_id] = state.retries.get(args.task_id, 0) + 1
+        state.save(state_path)
+        print(
+            f"reject: {e} (retries={state.retries[args.task_id]})",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME_ERROR
+    if args.task_id in state.in_flight_task_ids:
+        state.in_flight_task_ids.remove(args.task_id)
+    if args.task_id not in state.completed_task_ids:
+        state.completed_task_ids.append(args.task_id)
+    state.save(state_path)
+    print(f"commit ok: {args.task_id}")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mimiron")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -180,6 +213,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_gate.add_argument("slug")
     p_gate.add_argument("kind", choices=["mechanical", "semantic", "ambiguity", "quality"])
     p_gate.set_defaults(func=cmd_gate)
+
+    p_commit = sub.add_parser("commit-task", help="verify artifacts and mark task done")
+    p_commit.add_argument("slug")
+    p_commit.add_argument("task_id")
+    p_commit.set_defaults(func=cmd_commit_task)
 
     return p
 
