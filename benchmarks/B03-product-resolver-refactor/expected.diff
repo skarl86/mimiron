@@ -1,0 +1,81 @@
+diff --git a/agents/naver-smartstore/app/routers/product.py b/agents/naver-smartstore/app/routers/product.py
+index 8e7c2ebf8..71becc7c8 100644
+--- a/agents/naver-smartstore/app/routers/product.py
++++ b/agents/naver-smartstore/app/routers/product.py
+@@ -36,6 +36,26 @@ def _load_commerce_client() -> Any:
+     return getattr(commerce_module, "commerce_client")
+ 
+ 
++async def _resolve_product(client: Any, identifier: str) -> dict[str, Any] | None:
++    """PRD 코드 또는 channelProductNo 식별자로 상품 dict 를 조회한다.
++
++    PRD 코드는 search → channelProductNo 추출 후 재조회, channelProductNo 는 직조회.
++    어느 경로든 실패하면 None.
++    """
++    if identifier.startswith("PRD"):
++        search_result = await client.search_products_by_prd(identifier)
++        contents = search_result.get("contents") if search_result else None
++        if isinstance(contents, list) and contents:
++            first = contents[0]
++            channel_no = (
++                str(first.get("channelProductNo", "")) if isinstance(first, dict) else ""
++            )
++            if channel_no:
++                return await client.get_product(channel_no)
++        return None
++    return await client.get_product(identifier)
++
++
+ @tool(
+     description=(
+         "스마트스토어 상품 상세 정보를 조회합니다. "
+@@ -56,23 +76,7 @@ async def get_product_info(channel_product_no_or_prd_code: str) -> str:
+     from app.services.product_context import build_context_text
+ 
+     commerce_client = _load_commerce_client()
+-    identifier = channel_product_no_or_prd_code.strip()
+-    # TODO: PRD/channel 식별자 해상도 로직이 quote_price 와 중복.
+-    # 다음 정리 PR 에서 async def _resolve_product(client, identifier) -> dict | None 로 추출.
+-
+-    product: dict[str, Any] | None = None
+-    if identifier.startswith("PRD"):
+-        search_result = await commerce_client.search_products_by_prd(identifier)
+-        contents = search_result.get("contents") if search_result else None
+-        if isinstance(contents, list) and contents:
+-            first = contents[0]
+-            channel_no = (
+-                str(first.get("channelProductNo", "")) if isinstance(first, dict) else ""
+-            )
+-            if channel_no:
+-                product = await commerce_client.get_product(channel_no)
+-    else:
+-        product = await commerce_client.get_product(identifier)
++    product = await _resolve_product(commerce_client, channel_product_no_or_prd_code.strip())
+ 
+     if not product:
+         return "해당 식별자로 상품을 찾지 못했습니다. 상품 페이지 URL 또는 PRD 코드를 다시 확인해 주세요."
+@@ -99,23 +103,7 @@ async def quote_price(
+     from app.services.price_quote import QuoteLineRequest, compute_quote
+ 
+     commerce_client = _load_commerce_client()
+-    identifier = channel_product_no_or_prd_code.strip()
+-    # TODO: PRD/channel 식별자 해상도 로직이 quote_price 와 중복.
+-    # 다음 정리 PR 에서 async def _resolve_product(client, identifier) -> dict | None 로 추출.
+-
+-    product: dict[str, Any] | None = None
+-    if identifier.startswith("PRD"):
+-        search_result = await commerce_client.search_products_by_prd(identifier)
+-        contents = search_result.get("contents") if search_result else None
+-        if isinstance(contents, list) and contents:
+-            first = contents[0]
+-            channel_no = (
+-                str(first.get("channelProductNo", "")) if isinstance(first, dict) else ""
+-            )
+-            if channel_no:
+-                product = await commerce_client.get_product(channel_no)
+-    else:
+-        product = await commerce_client.get_product(identifier)
++    product = await _resolve_product(commerce_client, channel_product_no_or_prd_code.strip())
+ 
+     if not product:
+         return "해당 식별자로 상품을 찾지 못했습니다. 상품번호를 다시 확인해 주세요."

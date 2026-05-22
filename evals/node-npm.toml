@@ -1,0 +1,16 @@
+# Mechanical gate for Node.js projects.
+
+[[checks]]
+name = "test"
+command = "npm test --silent"
+timeout_s = 300
+
+[[checks]]
+name = "lint"
+command = "npm run lint"
+timeout_s = 60
+
+[[checks]]
+name = "typecheck"
+command = "npm run typecheck"
+timeout_s = 120

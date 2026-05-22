@@ -1,0 +1,19 @@
+id: B03-product-resolver-refactor
+repo: ../../.bench-clones/workspace
+base_ref: 459f093cbe90984404a8bb5ce5f550e78267e707
+target_ref: 5dc89af353d0c5ca61cffa962d4c1034bc875daf
+issue_text_file: issue.md
+expected_diff_file: expected.diff
+test_command: 'python3 -c "import sys; s=open(''agents/naver-smartstore/app/routers/product.py'').read(); ok = (''_resolve_product'' in s) and (s.count(''_resolve_product(commerce_client'') >= 2) and (''PRD/channel 식별자 해상도 로직이 quote_price 와 중복'' not in s); sys.exit(0 if ok else 1)"'
+difficulty: medium
+notes: |
+  원본 PR: ts-cxdm/workspace#2072 — refactor(smartstore): product 라우터 식별자 해상도 헬퍼 추출
+  base→target 사이 변경: 1 file (+22 / -34, net -12 LOC). 동작 변경 없음, *pure refactor*.
+
+  B01(easy fix, subtractive) / B02(medium fix, additive) 와 다른 *변경 유형*: refactor.
+  test_command 전략:
+    - `_resolve_product` 함수 정의 존재
+    - 호출자가 *2회* 등장 (get_product_info + quote_price 모두 사용)
+    - TODO 중복 주석 *제거됨*
+  base_ref → 헬퍼 정의 없음 + TODO 주석 존재 → exit 1
+  target_ref → 헬퍼 정의 + 2회 호출 + TODO 없음 → exit 0
