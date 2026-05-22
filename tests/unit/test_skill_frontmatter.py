@@ -7,6 +7,7 @@ SKILL_PATHS = [
     Path("skills/clarify/SKILL.md"),
     Path("skills/spec/SKILL.md"),
     Path("skills/bench-judge/SKILL.md"),
+    Path("skills/evaluate/SKILL.md"),
 ]
 
 
@@ -33,4 +34,10 @@ def test_spec_skill_frontmatter_has_required_fields() -> None:
 def test_bench_judge_skill_frontmatter_has_required_fields() -> None:
     fm = _frontmatter(SKILL_PATHS[2])
     assert fm["name"] == "mimiron-bench-judge"
+    assert len(fm["description"]) > 50
+
+
+def test_evaluate_skill_frontmatter_has_required_fields() -> None:
+    fm = _frontmatter(SKILL_PATHS[3])
+    assert fm["name"] == "mimiron-evaluate"
     assert len(fm["description"]) > 50
