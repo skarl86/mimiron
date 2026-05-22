@@ -1,7 +1,7 @@
 """_global/thresholds.yaml 로더."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields as _dc_fields
 from pathlib import Path
 from typing import Any
 import yaml
@@ -40,6 +40,7 @@ class Thresholds:
         if not path.exists():
             return cls.defaults()
         raw: dict[str, Any] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        known = {f.name for f in _dc_fields(cls)}
         d = cls.defaults().__dict__.copy()
-        d.update(raw)
+        d.update({k: v for k, v in raw.items() if k in known})
         return cls(**d)

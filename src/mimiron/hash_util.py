@@ -5,9 +5,10 @@ import hashlib
 from pathlib import Path
 
 
-def sha256_file(path: Path, chunk_size: int = 65536) -> str:
+def sha256_file(path: Path | str, chunk_size: int = 65536) -> str:
     h = hashlib.sha256()
-    with path.open("rb") as f:
+    p = Path(path) if not isinstance(path, Path) else path
+    with p.open("rb") as f:
         while chunk := f.read(chunk_size):
             h.update(chunk)
     return h.hexdigest()

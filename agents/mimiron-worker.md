@@ -52,8 +52,10 @@ For `action="create"`, `pre_hash=null` and `post_hash` must match the file you j
 Use this Bash recipe to compute hashes (or read `from mimiron.hash_util import sha256_file`):
 
 ```bash
-python3 -c "from mimiron.hash_util import sha256_file; print(sha256_file('path/to/file'))"
+.venv/bin/python -c "from mimiron.hash_util import sha256_file; print(sha256_file('path/to/file'))"
 ```
+
+(`python3` 시스템 인터프리터는 mimiron 패키지를 못 찾는다 — *반드시* 프로젝트 `.venv` 또는 mimiron이 install된 환경을 쓸 것. `sha256_file`은 `str` 또는 `Path` 둘 다 수용.)
 
 ## Common failure modes — avoid
 
