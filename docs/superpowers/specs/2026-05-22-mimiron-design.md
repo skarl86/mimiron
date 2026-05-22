@@ -218,6 +218,8 @@ Director skill은 `ready[]`에서 *최대 `max_parallel_workers`개*(기본 4, `
 
 **Fix-task 생성**: gate(evaluate) 실패 시 director skill이 실패 원인을 분석해 `plan.yaml`에 `T<원본>-fix`라는 추가 task를 자동 append (depends_on=원본 task). 이때 retry 카운터는 *원본 task* 기준으로 증가.
 
+**Spec freeze contract**: plan.yaml은 `spec_hash: <sha256(spec.yaml)>` 필드를 보존(§ 12.3). CLI `scan`/`commit-task`/`gate`가 매번 spec.yaml의 현재 해시를 비교 → 불일치면 *즉시 stuck*. spec을 다시 만지려면 `unstuck` 경로로 `state.spec_unlocked=true`를 명시적으로 켜야 함. plan 진입 후 spec mutation을 *구조적으로* 차단.
+
 ### 5.4 Persistent Stop Hook
 
 ```
@@ -230,13 +232,18 @@ stop-hook.py: .mimiron/*/state.json 스캔
     └─ 그 외 → 종료, 사용자 차례
 ```
 
-#### 무한 루프 방어 4겹
+#### 무한 루프 방어 6겹 (default-on persistence의 보호장치)
+
+Persistence가 default-on이라 *완성도 관점에서 강한 캡*이 필수.
+
 1. Gate가 phase 전이를 막음 → resume이 *같은 작업*을 반복할 수 없음 (gate 통과 못 하면 다음 phase로 못 감)
 2. Task 재시도 카운터 ≤ 3 (state.retries[task_id])
 3. Gate 연속 실패 ≥ 3 → phase=stuck
 4. `unstuck` skill 발동 → paused=true, stop-hook 비활성
+5. **Wall-clock cap** (default-on에서 *자동 활성*): 슬러그당 wall-clock ≤ 4h (`_global/thresholds.yaml.wall_clock_max_s` 조정). 초과 시 paused.
+6. **Token budget cap** (default-on에서 *자동 활성*): 슬러그당 LLM 입력+출력 토큰 ≤ 500K (`thresholds.yaml.token_budget`). 초과 시 paused.
 
-> 🟡 **재확정 예정**: 5번째 안전핀(슬러그당 총 LLM 호출 budget)이 필요한지는 persistent-loop 구현 시점에 결정.
+5·6번은 `persistent=true`인 슬러그에서만 자동 발동. opt-in `--persist` 호출이면 사용자 명시 — 그 경우에도 cap은 기본 활성, 끄려면 `--no-cap`.
 
 ## 6. Error Handling & Observability
 
@@ -276,7 +283,16 @@ flask-version-endpoint  [persistent ✓]
 - `drift.log`: PostToolUse hook이 owned 밖 쓰기 감지 시 추가.
 - Secret 가드: clarify skill 본문에 "spec에 API key 등 secret을 적지 않는다" 인스트럭션.
 
-### 6.4 Unstuck Skill (안전핀의 인격화)
+### 6.4 Judge 비결정성 방어 (4겹)
+
+LLM 게이트는 같은 입력이라도 점수가 흔들린다. 이걸 *4겹*으로 방어한다.
+
+1. **Median-of-3 + temperature=0**: 모든 LLM 게이트(ambiguity, quality, semantic_verdict, semantic_similarity)는 `temperature=0`으로 *3회 호출*해 median 사용. `verdict.json.samples` 필드에 raw 3개 보존(§ 12.4).
+2. **Certainty band**: 점수가 `[cutoff - 0.05, cutoff + 0.05]` 안이면 자동 `verdict: needs_review` → state=paused, 사용자 승인 대기. 그레이존을 LLM 단독 판단에 안 맡김.
+3. **Acceptance criteria 검증 컨트랙트**: spec.yaml의 각 `acceptance_criteria[].verify.kind`가 `test` / `grep` / `reviewer` 중 하나. *reviewer 단독*이 50% 초과면 spec quality_score에 페널티(0.1 차감). 주관적 검증을 *구조적으로* 제한.
+4. **Test mutation 룰** (`--mutate-tests` 옵션, v0 default off): evaluate 단계가 reviewer에게 *implementation을 변형해* 5종 mutant 생성 요청, 각 mutant에 test 실행. `mutation_score = killed/total`이 임계(0.6) 미만이면 *test 보강* fix-task 자동 추가. LLM 호출 5~10배 증가하므로 v0에선 opt-in.
+
+### 6.5 Unstuck Skill (안전핀의 인격화)
 
 루프 정책이 default-on이라 unstuck는 *일급 컴포넌트*. 사람을 적극 호출하는 게 본업.
 
@@ -415,23 +431,44 @@ while suite_aggregate < cutoff_global:
     4. 매 N iteration마다 mimiron-bench suite로 regression 체크
 ```
 
+#### Outer Loop Meta Safety Pins
+
+Ralph-loop이 영영 안 멈추는 시나리오를 방어한다. 5겹:
+
+1. **Iteration hard cap**: outer loop 총 iteration ≤ 30. 도달 시 정지, 사용자 호출.
+2. **점근 정체 감지**: 직전 5 iteration의 `suite_aggregate` 변화가 모두 < 0.02 → 정지, *"변화가 없습니다"* 보고.
+3. **All-deferred 정지**: `mimiron-bench list`가 모든 케이스를 deferred로 표시하면 정지, *"벤치마크 재큐레이션 필요"* 보고.
+4. **Wall-clock budget**: outer loop 총 wall-clock ≤ 24h (configurable). 도달 시 정지.
+5. **사용자 abort**: `mimiron-bench --abort` — 다음 iteration 시작 전에 우아하게 정지, 진행 보존.
+
+각 정지마다 `.mimiron/_outer/halt-report.md`에 *다음 액션 제안 3가지* 자동 작성.
+
 ### 7.5.6 Bootstrap Problem (Phase A / B 분리)
 
 Mimiron이 *조금이라도* 돌아야 bench가 의미 있다. 그래서 implementation plan은 두 단계로 나눈다.
 
-**Phase A — 수동 구현 (ralph-loop 불가)**:
-- 결정적 CLI 골격 (`init`, `scan`, `commit-task`, `gate`, `next`)
-- 첫 skill 3개 (clarify, spec, plan) — Phase A 끝나면 spec/plan을 *손으로* 만들 수 있음
-- 첫 worker 1개 (`mimiron-worker`)
-- B01 케이스를 *수동으로* 한 번 끝까지 돌려보며 인프라 검증
-- *Phase A 졸업 기준*: `mimiron-bench run B01`이 deferred 아닌 결과 (점수 무관)를 반환
+**Phase A — 수동 구현 (ralph-loop 불가)**
 
-**Phase B — ralph-loop 가능**:
+6개 체크포인트로 분해. 각 체크포인트는 *독립 PR로 머지 가능*하고, *그 자체로 test 가능*. 다음 체크포인트는 이전 게 안정될 때 진입.
+
+| 체크포인트 | 결과물 | 졸업 조건 |
+|---|---|---|
+| **A1** | `mimiron init/ls/status` 동작 | state.json 읽기/쓰기 unit test 통과 (schema § 12.1 준수) |
+| **A2** | `mimiron scan` + plan.yaml 파싱 | 가짜 plan.yaml로 DAG 스캔 + 파일 충돌 검사 unit test 통과 |
+| **A3** | `mimiron gate mechanical` + `commit-task` | 가짜 mechanical.toml + mtime 검증 통합 테스트 |
+| **A4** | `clarify` skill (LLM stub) | `MIMIRON_STUB=1` fixture로 happy path 통합 |
+| **A5** | `spec` skill + spec gate (ambiguity·quality) | spec.yaml 결정화 → quality_score gate (median-of-3) 통과 |
+| **A6** | `mimiron-bench run B01` 인프라 + B01 수동 종주 | `bench run B01`이 *deferred 아닌* JSON verdict 반환 (점수 무관) |
+
+A6 졸업이 Phase A 졸업이고, Phase B 진입 자격.
+
+**Phase B — ralph-loop 가능**
+
 - outer loop 진입, B01 정식 평가
-- 미해결(execute director, evaluate, finalize, persistence, unstuck)을 ralph가 iterative하게 보완
-- 종료: `suite_aggregate ≥ 0.75` OR 모든 케이스 ∈ {solved, deferred}
+- 미해결(execute director, evaluate, finalize, persistence loop, unstuck, drift hook, bench suite 큐레이션)을 ralph가 iterative하게 보완
+- 종료: § 7.5.5의 5겹 메타 안전핀 중 하나 발동, OR `suite_aggregate ≥ 0.75` + 최소 3개 solved
 
-대략 Phase A = plan의 앞 30~40%, Phase B = 나머지.
+대략 Phase A = plan의 앞 40~50%(체크포인트 6개), Phase B = 나머지.
 
 ### 7.5.7 Goodhart 방지 가드
 
@@ -454,13 +491,15 @@ Mimiron이 *조금이라도* 돌아야 bench가 의미 있다. 그래서 impleme
 
 ## 8. Deferred Decisions (재확정 예정)
 
-persistent-loop 구현 시점에 dogfood 근거로 확정:
+dogfood 근거로 확정. 모두 v0의 *기본값은 정해져 있고*, 보정만 dogfood 후.
 
-1. 🟡 **Gate를 phase 전이의 *유일한* 게이트키퍼로 유지할지** — v0 기본값 yes, dogfood하다 부적합하면 *조건부 강제*로 약화.
-2. 🟡 **무한 루프 방어 4겹이 충분한지** — 부족하면 5번째(슬러그당 총 LLM 호출 budget) 추가.
+1. 🟡 **Gate를 phase 전이의 *유일한* 게이트키퍼로 유지할지** — v0 yes, dogfood 후 부적합 시 *조건부 강제*로 약화.
+2. 🟡 **Persistence cap 임계값** — `wall_clock_max_s=14400`(4h), `token_budget=500K`이 v0 기본. 짧으면 정상 작업이 끊기고 길면 폭주 — 첫 5개 dogfood + benchmark로 보정.
 3. 🟡 **PostToolUse 드리프트 가드 강도** — v0는 `warn + log`, dogfood로 신뢰 쌓이면 `hard reject`로 승급.
-4. 🟡 **Benchmark cutoff 및 가중치** — `cutoff_case=0.75`, `cutoff_global=0.75`, `w_test=0.6`, `w_sim=0.4`가 v0 기본값. 첫 5개 benchmark 돌려본 뒤 false-positive / false-negative 비율로 조정.
+4. 🟡 **Benchmark cutoff 및 가중치** — `cutoff_case=0.75`, `cutoff_global=0.75`, `w_test=0.6`, `w_sim=0.4`가 v0 기본. 첫 5개 benchmark 돌려본 뒤 false-pos/neg 비율로 조정.
 5. 🟡 **Benchmark suite 큐레이션** — Phase A 종료 시점에 후보 PR 5개 확정. 본인 레포(`harness-sample`, `harness`)에서 3개, 외부 OSS에서 2개가 v0 기본 안.
+6. 🟡 **Test mutation 룰 활성화 여부** — v0는 `--mutate-tests` opt-in으로만. LLM 호출 5~10배라 dogfood에서 *가치 대비 비용*을 측정 후 default 결정.
+7. 🟡 **Component count 트리밍** — 현재 22 components(5 cmd + 9 skill + 3 agent + 3 hook + 2 CLI). 실제 작업 추정 7~10주. 13~14로 축소 가능 (resume/pause/status를 command 안으로 흡수, tester를 worker 옵션으로). Phase A 후반 회고에서 결정.
 
 ## 9. Optional: Lore Naming Convention
 
@@ -498,7 +537,149 @@ hooks/
 
 룰브릭의 *세부*는 각 skill의 SKILL.md에 작성. v0는 휴리스틱, v1+에서 정량 보정.
 
-## 12. Glossary
+## 12. Cross-Component Schemas (v0)
+
+다음 5개 파일이 컴포넌트 간 contract을 형성한다. 모든 파일은 root에 `schema_version: 1` 필수 (§ 13). 형식은 *minimum required* 만 기술 — 추가 필드는 forward-compat 정책에 따라 허용.
+
+### 12.1 state.json (CLI 단독 소유)
+
+```python
+{
+  "schema_version": 1,
+  "slug": str,
+  "phase": Literal["clarify", "spec", "plan", "execute", "evaluate", "finalize", "done", "stuck", "paused"],
+  "persistent": bool,
+  "paused": bool,
+  "spec_hash": str | None,            # plan 진입 후 freeze contract
+  "spec_unlocked": bool,              # unstuck 경로에서만 true
+  "current_task": str | None,
+  "completed_task_ids": list[str],
+  "in_flight_task_ids": list[str],
+  "retries": dict[str, int],          # {task_id: count}
+  "gate_history": list[GateRecord],   # § 12.4 verdict.json 동형
+  "consecutive_gate_fails": int,
+  "wall_clock_started_at": ISO8601,
+  "token_usage": int,                  # 누적 입력+출력
+  "created_at": ISO8601,
+  "updated_at": ISO8601
+}
+```
+
+### 12.2 spec.yaml
+
+```yaml
+schema_version: 1
+slug: <str>
+goal: <str>                            # 1~3 문장
+constraints:
+  - id: C01
+    desc: <str>
+    kind: what | prescribed_implementation   # 후자는 spec gate 면제
+acceptance_criteria:
+  - id: AC01
+    desc: <str>
+    verify:
+      kind: test | grep | reviewer
+      command: <str>                   # kind=test 일 때
+      pattern: <str>                   # kind=grep 일 때
+      in: <str>                        # kind=grep 일 때
+ontology:                              # free-form key:value
+  <term>: <definition>
+hypothesis:                            # 시그니처 채택 시(현재 v0 보류)
+  - id: H01
+    claim: <str>
+    confidence: 0.0~1.0
+quality_score: 0.0~1.0                 # spec gate가 채움
+ambiguity_score: 0.0~1.0               # clarify gate가 채움
+```
+
+### 12.3 plan.yaml
+
+```yaml
+schema_version: 1
+slug: <str>
+spec_hash: <str>                       # sha256(spec.yaml), freeze contract
+tasks:
+  - id: T01
+    title: <str>
+    worker: worker | tester | reviewer # 기본 "worker"
+    depends_on: [task_id, ...]
+    owned_files: [<path>, ...]
+    expected_artifacts: [<path>, ...]  # 워커가 만들어야 할 파일
+    timeout_s: int                     # 기본 600
+```
+
+### 12.4 verdict.json (per gate 호출)
+
+```python
+{
+  "schema_version": 1,
+  "slug": str,
+  "phase": str,
+  "kind": Literal["mechanical", "semantic", "ambiguity", "quality", "plan_integrity", "artifacts", "spec_freeze"],
+  "verdict": Literal["pass", "fail", "needs_review"],
+  "score": float | None,               # 0.0~1.0
+  "samples": list[float],              # median-of-3 raw 점수 (LLM 게이트만)
+  "details": dict,                     # kind마다 다름 (mechanical은 exit codes, semantic은 criteria별 채점)
+  "ts": ISO8601
+}
+```
+
+### 12.5 artifacts.json (per task, 워커 산출)
+
+```python
+{
+  "schema_version": 1,
+  "task_id": str,
+  "declared_files": [
+    {
+      "path": str,
+      "action": Literal["create", "modify", "delete"],
+      "pre_hash": str | None,          # base 시점 sha256
+      "post_hash": str,                # commit 시점 sha256
+      "pre_mtime": ISO8601 | None,
+      "post_mtime": ISO8601
+    }
+  ],
+  "worker_summary": str                # 마크다운, 사람용 요약
+}
+```
+
+CLI `commit-task`는 `declared_files`를 받아 *실제 파일의 post_hash/mtime을 재계산*해 일치 여부 검증 — 워커가 "고쳤다고만 적고 안 고치는" 거짓 보고를 잡음.
+
+## 13. Schema Versioning & Migration Policy
+
+모든 지속 파일(state.json, spec.yaml, plan.yaml, verdict.json, artifacts.json)이 따른다.
+
+### 변경 정책
+
+| 변경 종류 | version bump | migration script | 예시 |
+|---|---|---|---|
+| **Additive** (필드 추가, 기본값 있음) | 없음 | 불필요 | `state.token_usage` 추가 |
+| **Breaking** (필드 제거, 의미 변경) | +1 | 필수 | `phase` enum 값 이름 바꿈 |
+
+### Load-time 동작 (CLI)
+
+```
+expected = CLI_VERSION
+read    = file.schema_version
+
+if read == expected:                    → 정상 로드
+elif read < expected:                   → migrations/{read}_to_{read+1}.py
+                                         차례로 자동 실행, in-place rewrite,
+                                         원본은 `.bak` 보존
+elif read > expected:                   → ERROR
+                                         "CLI가 낡았습니다. mimiron 업그레이드
+                                          OR slug archive 후 새로 시작"
+```
+
+### Migration scripts
+
+`scripts/migrations/v<N>_to_v<N+1>.py` 형태. 단일 파일 입력 → 단일 파일 출력. 멱등. 실패 시 .bak 복원.
+
+**v0 시점**: 모두 schema_version=1. 마이그레이션 없음. 정책만 자리잡음.
+
+## 14. Glossary
 
 - **slug**: 한 기능 단위의 식별자. `.mimiron/<slug>/` 디렉토리 이름.
 - **sidecar**: 프로젝트 루트의 `.mimiron/<slug>/` 디렉토리 전체. state + 산출물.
