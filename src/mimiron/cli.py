@@ -37,6 +37,45 @@ def _check_slug_or_die(slug: str) -> None:
         )
 
 
+VALID_TOOLCHAINS = frozenset({"python-uv", "python-pip", "node-npm", "go"})
+
+
+def _plugin_root() -> Path:
+    """Mimiron plugin source root — evals/ fixture 위치 발견."""
+    return Path(__file__).resolve().parent.parent.parent
+
+
+_DEFAULT_THRESHOLDS = """\
+ambiguity_max: 0.20
+spec_quality_min: 0.85
+certainty_band: 0.05
+max_parallel_workers: 4
+wall_clock_max_s: 14400
+token_budget: 500000
+"""
+
+
+def _bootstrap_global(cwd: Path, toolchain: str) -> None:
+    """`.mimiron/_global/`에 mechanical.toml + thresholds.yaml 작성.
+
+    이미 존재하는 파일은 *덮어쓰지 않음* (사용자 결정 보존).
+    """
+    global_dir = cwd / ".mimiron" / "_global"
+    global_dir.mkdir(parents=True, exist_ok=True)
+    mech_target = global_dir / "mechanical.toml"
+    if not mech_target.exists():
+        fixture = _plugin_root() / "evals" / f"{toolchain}.toml"
+        if not fixture.exists():
+            raise SystemExit(
+                f"bootstrap fixture not found: {fixture}. "
+                f"Known toolchains: {sorted(VALID_TOOLCHAINS)}"
+            )
+        mech_target.write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
+    th_target = global_dir / "thresholds.yaml"
+    if not th_target.exists():
+        th_target.write_text(_DEFAULT_THRESHOLDS, encoding="utf-8")
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     _check_slug_or_die(args.slug)
     cwd = Path.cwd()
@@ -44,6 +83,15 @@ def cmd_init(args: argparse.Namespace) -> int:
     if sidecar.exists():
         print(f"error: slug {args.slug!r} already exists at {sidecar}", file=sys.stderr)
         return EXIT_RUNTIME_ERROR
+    if args.bootstrap_toolchain:
+        if args.bootstrap_toolchain not in VALID_TOOLCHAINS:
+            print(
+                f"error: unknown toolchain {args.bootstrap_toolchain!r}. "
+                f"Choose one of {sorted(VALID_TOOLCHAINS)}",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE_ERROR
+        _bootstrap_global(cwd, args.bootstrap_toolchain)
     sidecar.mkdir(parents=True)
     state = State.create(slug=args.slug, persistent=not args.no_persist)
     state.save(sidecar / "state.json")
@@ -181,6 +229,8 @@ def _maybe_transition(state: State, v: Verdict, sidecar: Path) -> None:
     transitions = {
         ("clarify", "ambiguity"): "spec",
         ("spec", "quality"): "plan",
+        ("plan", "plan_integrity"): "execute",
+        ("execute", "artifacts"): "evaluate",
         ("evaluate", "semantic"): "finalize",
     }
     next_phase = transitions.get((state.phase, v.kind))
@@ -227,6 +277,73 @@ def cmd_gate(args: argparse.Namespace) -> int:
                 "band": thresholds.certainty_band,
             },
         )
+    elif args.kind == "artifacts":
+        plan_path = sidecar / "plan.yaml"
+        if not plan_path.exists():
+            print(
+                f"error: plan.yaml missing at {plan_path}. "
+                "Run plan skill first.",
+                file=sys.stderr,
+            )
+            return EXIT_RUNTIME_ERROR
+        try:
+            plan = Plan.load(plan_path)
+            plan.validate()
+        except PlanError as e:
+            print(f"plan invalid: {e}", file=sys.stderr)
+            return EXIT_RUNTIME_ERROR
+        result = run_scan(plan, state.completed_task_ids, state.in_flight_task_ids)
+        if result.phase_done:
+            v = Verdict.make(
+                slug=args.slug, phase=state.phase, kind="artifacts",
+                verdict="pass",
+                details={"completed_count": len(state.completed_task_ids)},
+            )
+        else:
+            v = Verdict.make(
+                slug=args.slug, phase=state.phase, kind="artifacts",
+                verdict="fail",
+                details={
+                    "ready": result.ready,
+                    "in_flight": result.in_flight,
+                    "pending": result.pending,
+                },
+            )
+    elif args.kind == "plan_integrity":
+        plan_path = sidecar / "plan.yaml"
+        if not plan_path.exists():
+            print(
+                f"error: plan.yaml missing at {plan_path}. "
+                "Run plan skill first.",
+                file=sys.stderr,
+            )
+            return EXIT_RUNTIME_ERROR
+        try:
+            plan = Plan.load(plan_path)
+            plan.validate()
+        except PlanError as e:
+            v = Verdict.make(
+                slug=args.slug, phase=state.phase, kind="plan_integrity",
+                verdict="fail", details={"error": str(e)},
+            )
+        else:
+            if state.spec_hash is not None and plan.spec_hash != state.spec_hash:
+                v = Verdict.make(
+                    slug=args.slug, phase=state.phase, kind="plan_integrity",
+                    verdict="fail",
+                    details={
+                        "error": (
+                            f"spec_hash mismatch: plan={plan.spec_hash[:8]}, "
+                            f"state={state.spec_hash[:8]}"
+                        )
+                    },
+                )
+            else:
+                v = Verdict.make(
+                    slug=args.slug, phase=state.phase, kind="plan_integrity",
+                    verdict="pass",
+                    details={"task_count": len(plan.tasks)},
+                )
     elif args.kind == "semantic":
         semantic_path = sidecar / "evaluation" / "semantic.json"
         if not semantic_path.exists():
@@ -461,6 +578,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_init = sub.add_parser("init", help="initialize a new slug")
     p_init.add_argument("slug")
     p_init.add_argument("--no-persist", action="store_true", help="disable persistent loop")
+    p_init.add_argument(
+        "--bootstrap-toolchain",
+        dest="bootstrap_toolchain",
+        default=None,
+        help=(
+            "Also write .mimiron/_global/{mechanical.toml,thresholds.yaml} if absent. "
+            "Choose one of python-uv|python-pip|node-npm|go."
+        ),
+    )
     p_init.set_defaults(func=cmd_init)
 
     p_ls = sub.add_parser("ls", help="list all slugs with phase")
@@ -476,7 +602,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_gate = sub.add_parser("gate", help="run a gate")
     p_gate.add_argument("slug")
-    p_gate.add_argument("kind", choices=["mechanical", "semantic", "ambiguity", "quality"])
+    p_gate.add_argument(
+        "kind",
+        choices=["mechanical", "semantic", "ambiguity", "quality", "plan_integrity", "artifacts"],
+    )
     p_gate.set_defaults(func=cmd_gate)
 
     p_commit = sub.add_parser("commit-task", help="verify artifacts and mark task done")
