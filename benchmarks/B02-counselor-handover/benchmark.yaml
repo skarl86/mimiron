@@ -1,0 +1,15 @@
+id: B02-counselor-handover
+repo: ../../.bench-clones/workspace
+base_ref: f5ffd87fcf7ef0a9bda100fc12230760f2d1fadd
+target_ref: 7e4b0c71c14fee45da88b8706a6fd2f50eb935d1
+issue_text_file: issue.md
+expected_diff_file: expected.diff
+test_command: 'python3 -c "import sys; s=open(''agents/naver-smartstore/app/__main__.py'').read(); ok = (''talk.standby is True'' in s) and (''talk.event == \"handover\"'' in s) and (''initiate_counselor_passthread'' in s); sys.exit(0 if ok else 1)"'
+difficulty: medium
+notes: |
+  원본 PR: ts-cxdm/workspace#1336 — fix(naver-smartstore): 상담사 개입 시 봇 이중 응답 방지 핸드오버 처리
+  base→target 사이 변경: 4개 파일 (+143 lines / -2 lines)
+  파일: __main__.py (webhook 가드 3종), services/talktalk.py (passThread 헬퍼),
+        types.py (standby 필드), tests/test_welcome_message.py (테스트 4개)
+  test_command 전략: 핵심 가드 3개(standby/handover/initiate_counselor_passthread)가
+  __main__.py에 모두 *존재*하면 pass. 의존성 풀-인스톨 회피.

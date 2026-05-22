@@ -1,0 +1,193 @@
+diff --git a/agents/naver-smartstore/app/__main__.py b/agents/naver-smartstore/app/__main__.py
+index 389deac6d..569442db7 100644
+--- a/agents/naver-smartstore/app/__main__.py
++++ b/agents/naver-smartstore/app/__main__.py
+@@ -17,7 +17,7 @@
+ from app.logger_config import get_logger
+ from app.conversation_logger import log_conversation
+ from app.supabase_client import supabase
+-from app.services.talktalk import send_talktalk_message
++from app.services.talktalk import send_talktalk_message, initiate_counselor_passthread
+ from app.services.daily_access_tracker import daily_tracker
+ from app.types import NaverTalkTalkModel
+ from app.utils import extract_channel_product_no, extract_order_id, extract_prd_code, extract_product_no_from_outlink, get_kst_today
+@@ -95,7 +95,37 @@ async def webhook(request: Request) -> JSONResponse:
+ 
+         talk = NaverTalkTalkModel.model_validate(payload)
+ 
+-        if talk.event in ("standby", "echo"):
++        # 상담사가 주도권 보유 중인 세션 (공식 스펙 경로) — 봇 응답 금지
++        if talk.standby is True:
++            logger.info(
++                "standby active, bot skip: user=%s event=%s", talk.user, talk.event
++            )
++            return JSONResponse({}, status_code=200)
++
++        # 상담사 인수인계 이벤트 — 봇은 로그만 남기고 종료
++        if talk.event == "handover":
++            logger.info(
++                "handover event: user=%s options=%s", talk.user, talk.options
++            )
++            return JSONResponse({}, status_code=200)
++
++        # echo 이벤트: 상담사 발화(sourceId==1 + managerNickname) 감지 시
++        # 봇이 대신 passThread를 발송해 주도권을 상담사에게 공식 이양한다.
++        # 이후 사용자 메시지에 네이버가 standby=true를 부착하므로 위 가드가 차단.
++        if talk.event == "echo":
++            opts = talk.options or {}
++            source_id = opts.get("sourceId")
++            manager_nickname = opts.get("managerNickname")
++            if source_id == 1 and manager_nickname:
++                logger.info(
++                    "counselor echo detected, initiating passThread: user=%s nickname=%s",
++                    talk.user,
++                    manager_nickname,
++                )
++                _ = await initiate_counselor_passthread(talk.user)
++            return JSONResponse({}, status_code=200)
++
++        if talk.event == "standby":
+             return JSONResponse({}, status_code=200)
+ 
+         if talk.event == "open":
+diff --git a/agents/naver-smartstore/app/services/talktalk.py b/agents/naver-smartstore/app/services/talktalk.py
+index f358ab24a..1777c739b 100644
+--- a/agents/naver-smartstore/app/services/talktalk.py
++++ b/agents/naver-smartstore/app/services/talktalk.py
+@@ -89,3 +89,44 @@ async def handover_to_counselor(
+         channel_product_no=channel_product_no,
+     )
+     return True
++
++
++async def initiate_counselor_passthread(user_id: str) -> bool:
++    """상담사가 passThread 없이 메시지를 입력한 것을 감지한 경우,
++    봇이 대신 passThread를 발송해 주도권을 공식 이양시킨다.
++
++    이후 사용자 메시지에 네이버가 자동으로 `standby=true`를 부착하므로
++    기존 standby 가드가 봇 응답을 차단한다. 사용자에게 보이는 안내 텍스트는
++    포함하지 않는다(이미 상담사가 응대 중이므로).
++    """
++    if not settings.naver_talk_partner_id:
++        logger.warning("NAVER_TALK_PARTNER_ID 미설정, passThread 건너뜀")
++        return False
++
++    message = NaverTalkTalkModel(
++        event="handover",
++        user=user_id,
++        partner=settings.naver_talk_partner_id,
++        options={
++            "control": "passThread",
++            "targetId": 1,
++        },
++    )
++    headers = {
++        "Content-Type": "application/json",
++        "Authorization": settings.naver_talk_send_token,
++    }
++
++    try:
++        async with httpx.AsyncClient(timeout=30.0) as client:
++            response = await client.post(
++                TALKTALK_API_URL,
++                json=message.model_dump(exclude_none=True),
++                headers=headers,
++            )
++            _ = response.raise_for_status()
++            logger.info("counselor passThread 발송 완료: %s", user_id)
++            return True
++    except Exception as e:
++        logger.error("counselor passThread 발송 실패: %s - %s", user_id, e)
++        return False
+diff --git a/agents/naver-smartstore/app/types.py b/agents/naver-smartstore/app/types.py
+index 82d02d3b2..2ada11434 100644
+--- a/agents/naver-smartstore/app/types.py
++++ b/agents/naver-smartstore/app/types.py
+@@ -40,6 +40,7 @@ class NaverTalkTalkModel(BaseModel):
+     event: str
+     user: str
+     partner: str | None = None
++    standby: bool | None = None
+     textContent: NaverTalkTalkTextContent | None = None
+     imageContent: NaverTalkTalkImageContent | None = None
+     options: dict[str, object] | None = None
+diff --git a/agents/naver-smartstore/tests/test_welcome_message.py b/agents/naver-smartstore/tests/test_welcome_message.py
+index 32eb91217..272ca0f4d 100644
+--- a/agents/naver-smartstore/tests/test_welcome_message.py
++++ b/agents/naver-smartstore/tests/test_welcome_message.py
+@@ -128,6 +128,75 @@ async def test_standby_echo_unchanged() -> None:
+         assert response_echo.status_code == 200
+ 
+ 
++async def test_send_with_standby_true_skips_bot() -> None:
++    """상담사 주도권 보유(standby=true) 중 send 이벤트는 봇이 응답하지 않는다."""
++    with patch("app.__main__.send_talktalk_message", new_callable=AsyncMock) as mock_send, \
++         patch("app.__main__._process_with_agent", new_callable=AsyncMock) as mock_process, \
++         patch("app.__main__.log_conversation", new_callable=AsyncMock) as mock_log:
++        mock_send.return_value = True
++
++        response = await _call_webhook({
++            "event": "send",
++            "user": "u_standby",
++            "standby": True,
++            "textContent": {"text": "스티커를 전송했습니다.", "inputType": "typing"},
++        })
++
++        mock_send.assert_not_called()
++        mock_process.assert_not_called()
++        mock_log.assert_not_called()
++        assert isinstance(response, JSONResponse)
++        assert response.status_code == 200
++
++
++async def test_counselor_echo_triggers_passthread() -> None:
++    """상담사 echo(sourceId==1+managerNickname) 감지 시 봇이 passThread를 발송한다."""
++    user = "u_counselor"
++    with patch("app.__main__.initiate_counselor_passthread", new_callable=AsyncMock) as mock_passthread:
++        mock_passthread.return_value = True
++
++        response = await _call_webhook({
++            "event": "echo",
++            "user": user,
++            "textContent": {"text": "[상담자개입] 판매중이 아닙니다.", "inputType": "typing"},
++            "options": {"sourceId": 1, "threadOwnerId": 37241, "managerNickname": "이남기"},
++        })
++
++        mock_passthread.assert_called_once_with(user)
++        assert isinstance(response, JSONResponse)
++        assert response.status_code == 200
++
++
++async def test_bot_echo_does_not_trigger_passthread() -> None:
++    """봇이 보낸 메시지 echo(sourceId == partnerId)는 passThread를 발송하지 않는다."""
++    with patch("app.__main__.initiate_counselor_passthread", new_callable=AsyncMock) as mock_passthread:
++        await _call_webhook({
++            "event": "echo",
++            "user": "u_bot_echo",
++            "textContent": {"text": "봇 응답", "inputType": "typing"},
++            "options": {"sourceId": 37241, "threadOwnerId": 37241},
++        })
++        mock_passthread.assert_not_called()
++
++
++async def test_handover_event_skips_bot() -> None:
++    """handover 이벤트는 봇이 응답하지 않는다."""
++    with patch("app.__main__.send_talktalk_message", new_callable=AsyncMock) as mock_send, \
++         patch("app.__main__._process_with_agent", new_callable=AsyncMock) as mock_process:
++        mock_send.return_value = True
++
++        response = await _call_webhook({
++            "event": "handover",
++            "user": "u_handover",
++            "options": {"control": "passThread"},
++        })
++
++        mock_send.assert_not_called()
++        mock_process.assert_not_called()
++        assert isinstance(response, JSONResponse)
++        assert response.status_code == 200
++
++
+ async def test_send_uses_tracker_referer_as_fallback() -> None:
+     """send 이벤트에 referer 없을 때 — tracker에 저장된 referer를 폴백으로 사용한다."""
+     referer_url = "https://smartstore.naver.com/tourvisofficial/products/999"
