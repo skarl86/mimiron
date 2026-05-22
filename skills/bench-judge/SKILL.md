@@ -1,0 +1,94 @@
+---
+name: mimiron-bench-judge
+description: Mimiron self-eval 루프의 *판정자(judge)*. Mimiron이 만든 diff와 원본 PR의 expected diff를 비교해 0~1 의미 유사도 점수를 산출, .mimiron/_outer/judge/<bench_id>.json으로 기록한다. `mimiron-bench run <id> --similarity-from <judge.json>`이 그 파일을 읽어 verdict를 확정. deterministic CLI에서 LLM 직접 호출이 금지되므로 (3-Lane 분리) 이 skill이 *유일한* judge 생산 경로.
+---
+
+# bench-judge — Mimiron Self-Eval Judge
+
+## 언제 발동
+
+- `mimiron-bench run <id>` 이 `status: deferred, reason: similarity_provider not set`을 반환했을 때
+- 사용자가 `bench-judge <id>` 또는 동등 요청을 했을 때
+- Outer ralph-loop이 deferred 케이스를 unstuck하려 할 때
+
+## 진입 조건
+
+- `benchmarks/<bench_id>/expected.diff` 가 존재
+- Mimiron이 만든 *후보 diff* 가 다음 중 하나에 존재:
+  - `.mimiron/_bench/<bench_id>/mimiron_output.diff` (자동 모드)
+  - `.mimiron/<task_slug>/mimiron_output.diff` (수동 모드)
+  - 사용자가 `--actual <path>`로 명시
+- `state.phase`는 무관 (이 skill은 outer-loop 도구)
+
+## 산출물
+
+- `.mimiron/_outer/judge/<bench_id>.json`
+  ```json
+  {
+    "score": 0.0~1.0,
+    "rationale": "<200자 미만 정리>",
+    "samples": [s1, s2, s3],
+    "ts": "<ISO8601>"
+  }
+  ```
+  (현 v0 schema는 `score`만 필수. `samples`/`rationale`/`ts`는 future-compat optional.)
+
+## 점수 룰브릭 (4 차원, 각 0~1, *동일 가중치 평균*)
+
+1. **J1 — 변경 위치 일치도**: actual diff의 파일/함수가 expected와 같은가
+2. **J2 — 변경 의미 일치도**: 추가/삭제/수정의 *기능적 효과*가 같은가 (이름/주석은 무관)
+3. **J3 — 회귀 위험**: actual이 expected가 *건드리지 않은* 영역을 손댔는가 (많을수록 점수 ↓)
+4. **J4 — 완결성**: acceptance criteria의 *모든* 항목이 actual에서 만족되는가
+
+`score = (J1 + J2 + J3 + J4) / 4`
+
+## 흐름
+
+1. `benchmarks/<id>/expected.diff` 읽기.
+2. actual diff 위치 결정 (위 진입조건 우선순위).
+3. 두 diff를 *나란히* 살피며 4-차원 채점.
+4. **median-of-3** 실행 (같은 룰브릭으로 3회 채점, median을 score로):
+   - LLM temperature=0
+   - 3 샘플 모두 기록 (audit용)
+5. **Certainty band** check: 3 샘플의 *최대-최소* 가 0.15를 초과하면 *uncertain*로
+   판정 → score는 median을 유지하되 `rationale`에 "uncertain — spread 0.X"를 명시.
+6. `.mimiron/_outer/judge/<bench_id>.json` 작성 (atomic — 임시 파일에 write 후 rename).
+7. 사용자에게 한 줄 보고:
+   ```
+   judge <id>: score=0.XX (samples [.X, .X, .X], spread .Y). 
+   → mimiron-bench run <id> --similarity-from <path>
+   ```
+
+## 가드
+
+- **LLM 호출은 *이 skill 안에서만***. CLI에 점수 산출을 위임하지 말 것.
+- **expected.diff와 actual diff를 *그대로* LLM에 전달**. 사전 요약/정규화 금지 (편향).
+- **점수 0.0 ~ 1.0 *strict***. 0 미만/1 초과는 무효 — 재채점.
+- **score = 1.0이 나오면 의심**. 두 diff가 *문자 단위로* 동일하지 않은 한 1.0은 거의 없음.
+  나오면 rationale에 *왜* 그렇게 판단했는지 명시.
+- **score = 0.0도 의심**. 어떤 actual diff든 J1 위치 일부는 일치할 수 있음. 0이 나오면
+  actual이 *완전히 빈* diff인지 먼저 확인.
+
+## 산출 예시
+
+```json
+{
+  "score": 0.82,
+  "rationale": "J1=1.0(같은 파일), J2=0.8(같은 효과, 이름 다름), J3=0.7(불필요한 import 추가), J4=0.8(criteria 4/5 만족). median-of-3 from [0.80, 0.82, 0.85], spread 0.05 (certain).",
+  "samples": [0.80, 0.82, 0.85],
+  "ts": "2026-05-23T12:34:56Z"
+}
+```
+
+## 안 할 것
+
+- ❌ Mimiron CLI를 *수정*하지 말 것 (CLI는 결정적 lane).
+- ❌ expected.diff를 *수정*하지 말 것 (외부 PR repo 기반, 읽기 전용).
+- ❌ score를 *수동으로* 결정하지 말 것 (median-of-3 룰브릭 강제).
+- ❌ `--similarity-from` 인자를 임의 변경하지 말 것 (CLI 계약).
+
+## 다음
+
+- judge 파일 작성 → 사용자가 `mimiron-bench run <id> --similarity-from <path>` 실행.
+- verdict가 `passed` (≥cutoff)면 그 케이스는 outer-loop에서 *해결됨*.
+- `failed`면 ralph-loop의 다음 iter에서 Mimiron 본체 수정.
