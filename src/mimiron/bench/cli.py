@@ -22,6 +22,21 @@ def _benchmark_dirs(cwd: Path) -> list[Path]:
 def cmd_list(args: argparse.Namespace) -> int:
     cwd = Path.cwd()
     dirs = _benchmark_dirs(cwd)
+    if getattr(args, "json", False):
+        rows: list[dict[str, str]] = []
+        for d in dirs:
+            try:
+                b = Benchmark.load(d / "benchmark.yaml")
+            except BenchmarkError:
+                rows.append({"id": d.name, "difficulty": "unknown", "status": "corrupted"})
+                continue
+            status_path = cwd / ".mimiron" / "_outer" / "status" / f"{b.id}.json"
+            status = "pending"
+            if status_path.exists():
+                status = json.loads(status_path.read_text())["status"]
+            rows.append({"id": b.id, "difficulty": b.difficulty, "status": status})
+        print(json.dumps(rows))
+        return 0
     if not dirs:
         print("no benchmarks (looked for benchmarks/<id>/benchmark.yaml)")
         return 0
@@ -133,6 +148,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     p_list = sub.add_parser("list")
+    p_list.add_argument(
+        "--json", action="store_true",
+        help="Output machine-readable JSON array instead of human table.",
+    )
     p_list.set_defaults(func=cmd_list)
 
     p_run = sub.add_parser("run")

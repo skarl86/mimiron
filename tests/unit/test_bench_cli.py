@@ -68,3 +68,67 @@ def test_run_with_similarity_from_malformed_exits_2(
     assert rc == 2
     err = capsys.readouterr().err
     assert "judge file" in err
+
+
+def test_list_json_emits_valid_array_for_populated(
+    bench_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(bench_root)
+    rc = main(["list", "--json"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    arr = json.loads(out)
+    assert isinstance(arr, list)
+    assert len(arr) >= 1
+    for entry in arr:
+        assert set(entry) >= {"id", "difficulty", "status"}
+        assert isinstance(entry["id"], str)
+        assert isinstance(entry["difficulty"], str)
+        assert isinstance(entry["status"], str)
+
+
+def test_list_json_empty_returns_empty_array(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """benchmarks/ 자체가 없거나 비어있으면 JSON은 []."""
+    monkeypatch.chdir(tmp_path)
+    rc = main(["list", "--json"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    arr = json.loads(out)
+    assert arr == []
+
+
+def test_list_without_json_preserves_table_header(
+    bench_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """회귀: --json 없이는 기존 사람용 표 헤더가 그대로."""
+    monkeypatch.chdir(bench_root)
+    rc = main(["list"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "ID" in out
+    assert "DIFFICULTY" in out
+    assert "STATUS" in out
+
+
+def test_list_json_corrupted_benchmark_yields_corrupted_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """benchmark.yaml에 필수 필드 누락이면 JSON에 status=corrupted 행 한 줄."""
+    bench_dir = tmp_path / "benchmarks" / "broken"
+    bench_dir.mkdir(parents=True)
+    (bench_dir / "benchmark.yaml").write_text("id: broken\n")  # 필수 필드 누락
+    monkeypatch.chdir(tmp_path)
+    rc = main(["list", "--json"])
+    assert rc == 0
+    arr = json.loads(capsys.readouterr().out)
+    assert any(e.get("status") == "corrupted" for e in arr)

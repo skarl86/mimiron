@@ -1,0 +1,6 @@
+ambiguity_max: 0.20
+spec_quality_min: 0.85
+certainty_band: 0.05
+max_parallel_workers: 4
+wall_clock_max_s: 14400
+token_budget: 500000
