@@ -128,6 +128,23 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"error: slug {args.slug!r} not found at {state_path}", file=sys.stderr)
         return EXIT_RUNTIME_ERROR
     state = State.load(state_path)
+    if getattr(args, "json", False):
+        print(
+            _json.dumps(
+                {
+                    "slug": state.slug,
+                    "phase": state.phase,
+                    "persistent": state.persistent,
+                    "paused": state.paused,
+                    "retries": dict(state.retries),
+                    "gate_count": len(state.gate_history),
+                    "consecutive_gate_fails": state.consecutive_gate_fails,
+                    "token_usage": state.token_usage,
+                    "updated_at": state.updated_at,
+                }
+            )
+        )
+        return EXIT_OK
     persist_tag = "persistent ✓" if state.persistent else "persistent ✗"
     paused_tag = "  [paused]" if state.paused else ""
     print(f"{state.slug}  [{persist_tag}]{paused_tag}")
@@ -594,6 +611,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_status = sub.add_parser("status", help="show status of a slug")
     p_status.add_argument("slug")
+    p_status.add_argument(
+        "--json", action="store_true",
+        help="Emit machine-readable JSON object instead of ASCII tree.",
+    )
     p_status.set_defaults(func=cmd_status)
 
     p_scan = sub.add_parser("scan", help="compute next ready tasks")
