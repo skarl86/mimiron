@@ -7,11 +7,15 @@ import re
 import sys
 from pathlib import Path
 
+import yaml
+
 from mimiron.artifacts import Artifacts, ArtifactError
 from mimiron.gates import run_mechanical_gate
 from mimiron.plan import Plan, PlanError
 from mimiron.scanner import scan as run_scan
 from mimiron.state import GateRecord, State
+from mimiron.thresholds import Thresholds
+from mimiron.verdict import Verdict
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
@@ -124,6 +128,20 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _read_clarification_score(sidecar: Path) -> tuple[float, list[float]]:
+    cm = sidecar / "clarification.md"
+    if not cm.exists():
+        raise SystemExit(f"clarification.md missing at {cm}")
+    text = cm.read_text(encoding="utf-8")
+    if not text.startswith("---\n"):
+        raise SystemExit("clarification.md missing YAML frontmatter")
+    end = text.index("\n---\n", 4)
+    fm = yaml.safe_load(text[4:end])
+    score = float(fm["ambiguity_score"])
+    samples = [float(x) for x in fm.get("samples", [])]
+    return score, samples
+
+
 def cmd_gate(args: argparse.Namespace) -> int:
     cwd = Path.cwd()
     sidecar = _sidecar_dir(cwd, args.slug)
@@ -136,6 +154,27 @@ def cmd_gate(args: argparse.Namespace) -> int:
         toml_path = cwd / ".mimiron" / "_global" / "mechanical.toml"
         v = run_mechanical_gate(
             toml_path=toml_path, slug=args.slug, cwd=cwd, phase=state.phase
+        )
+    elif args.kind == "ambiguity":
+        thresholds = Thresholds.load_or_default(
+            cwd / ".mimiron" / "_global" / "thresholds.yaml"
+        )
+        score, samples = _read_clarification_score(sidecar)
+        band_lo = thresholds.ambiguity_max - thresholds.certainty_band
+        band_hi = thresholds.ambiguity_max + thresholds.certainty_band
+        if band_lo <= score <= band_hi:
+            verdict = "needs_review"
+        elif score <= thresholds.ambiguity_max:
+            verdict = "pass"
+        else:
+            verdict = "fail"
+        v = Verdict.make(
+            slug=args.slug, phase=state.phase, kind="ambiguity",
+            verdict=verdict, score=score, samples=samples,
+            details={
+                "threshold": thresholds.ambiguity_max,
+                "band": thresholds.certainty_band,
+            },
         )
     else:
         print(f"gate kind {args.kind!r} not yet implemented", file=sys.stderr)
