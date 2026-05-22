@@ -7,9 +7,10 @@ import re
 import sys
 from pathlib import Path
 
+from mimiron.gates import run_mechanical_gate
 from mimiron.plan import Plan, PlanError
 from mimiron.scanner import scan as run_scan
-from mimiron.state import State
+from mimiron.state import GateRecord, State
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
@@ -122,6 +123,39 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_gate(args: argparse.Namespace) -> int:
+    cwd = Path.cwd()
+    sidecar = _sidecar_dir(cwd, args.slug)
+    state_path = sidecar / "state.json"
+    if not state_path.exists():
+        print(f"error: slug {args.slug!r} not initialized", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+    state = State.load(state_path)
+    if args.kind == "mechanical":
+        toml_path = cwd / ".mimiron" / "_global" / "mechanical.toml"
+        v = run_mechanical_gate(
+            toml_path=toml_path, slug=args.slug, cwd=cwd, phase=state.phase
+        )
+    else:
+        print(f"gate kind {args.kind!r} not yet implemented", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+    verdict_path = sidecar / "evaluation" / f"{args.kind}.json"
+    v.save(verdict_path)
+    state.gate_history.append(
+        GateRecord(
+            phase=v.phase, kind=v.kind, verdict=v.verdict,
+            score=v.score, samples=v.samples, ts=v.ts,
+        )
+    )
+    if v.verdict == "fail":
+        state.consecutive_gate_fails += 1
+    elif v.verdict == "pass":
+        state.consecutive_gate_fails = 0
+    state.save(state_path)
+    print(_json.dumps({"verdict": v.verdict, "score": v.score, "path": str(verdict_path)}))
+    return EXIT_OK if v.verdict != "fail" else EXIT_RUNTIME_ERROR
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mimiron")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -141,6 +175,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan = sub.add_parser("scan", help="compute next ready tasks")
     p_scan.add_argument("slug")
     p_scan.set_defaults(func=cmd_scan)
+
+    p_gate = sub.add_parser("gate", help="run a gate")
+    p_gate.add_argument("slug")
+    p_gate.add_argument("kind", choices=["mechanical", "semantic", "ambiguity", "quality"])
+    p_gate.set_defaults(func=cmd_gate)
 
     return p
 

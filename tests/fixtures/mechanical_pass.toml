@@ -1,0 +1,4 @@
+[[checks]]
+name = "echo"
+command = "echo ok"
+timeout_s = 5

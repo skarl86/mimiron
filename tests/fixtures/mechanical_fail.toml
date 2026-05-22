@@ -1,0 +1,4 @@
+[[checks]]
+name = "fail"
+command = "false"
+timeout_s = 5
