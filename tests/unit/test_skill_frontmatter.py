@@ -11,6 +11,7 @@ SKILL_PATHS = [
     Path("skills/finalize/SKILL.md"),
     Path("skills/execute/SKILL.md"),
     Path("skills/plan/SKILL.md"),
+    Path("skills/unstuck/SKILL.md"),
 ]
 
 
@@ -61,4 +62,10 @@ def test_execute_skill_frontmatter_has_required_fields() -> None:
 def test_plan_skill_frontmatter_has_required_fields() -> None:
     fm = _frontmatter(SKILL_PATHS[6])
     assert fm["name"] == "mimiron-plan"
+    assert len(fm["description"]) > 50
+
+
+def test_unstuck_skill_frontmatter_has_required_fields() -> None:
+    fm = _frontmatter(SKILL_PATHS[7])
+    assert fm["name"] == "mimiron-unstuck"
     assert len(fm["description"]) > 50

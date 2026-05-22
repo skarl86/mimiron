@@ -358,6 +358,45 @@ def cmd_commit_task(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_pause(args: argparse.Namespace) -> int:
+    cwd = Path.cwd()
+    state_path = _sidecar_dir(cwd, args.slug) / "state.json"
+    if not state_path.exists():
+        print(f"error: slug {args.slug!r} not initialized", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+    state = State.load(state_path)
+    state.paused = True
+    state.save(state_path)
+    print(f"paused: {args.slug}")
+    return EXIT_OK
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    cwd = Path.cwd()
+    state_path = _sidecar_dir(cwd, args.slug) / "state.json"
+    if not state_path.exists():
+        print(f"error: slug {args.slug!r} not initialized", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+    state = State.load(state_path)
+    if state.phase == "stuck":
+        print(
+            f"error: slug {args.slug!r} is stuck. Use `mimiron unstuck {args.slug}` "
+            "instead of resume.",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME_ERROR
+    if state.phase == "done":
+        print(
+            f"error: slug {args.slug!r} is done. Start a new slug with `/mimiron`.",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME_ERROR
+    state.paused = False
+    state.save(state_path)
+    print(f"resumed: {args.slug} (phase={state.phase})")
+    return EXIT_OK
+
+
 def cmd_archive(args: argparse.Namespace) -> int:
     """finalize → done 종착. stop-hook re-entry 방지를 위해 persistent=false."""
     cwd = Path.cwd()
@@ -450,6 +489,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_archive.add_argument("slug")
     p_archive.set_defaults(func=cmd_archive)
+
+    p_pause = sub.add_parser("pause", help="paused=true 마킹 (persistent loop 차단)")
+    p_pause.add_argument("slug")
+    p_pause.set_defaults(func=cmd_pause)
+
+    p_resume = sub.add_parser("resume", help="paused 해제 (stuck/done은 거부)")
+    p_resume.add_argument("slug")
+    p_resume.set_defaults(func=cmd_resume)
 
     return p
 
