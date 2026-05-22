@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict, fields as _dc_fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -98,11 +98,13 @@ class State:
         if phase not in VALID_PHASES:
             raise ValueError(f"invalid phase {phase!r}; expected one of {sorted(VALID_PHASES)}")
         raw["gate_history"] = [GateRecord.from_dict(g) for g in raw.get("gate_history", [])]
-        return cls(**raw)
+        # forward-compat: drop unknown keys instead of crashing with TypeError
+        known = {f.name for f in _dc_fields(cls)}
+        filtered = {k: v for k, v in raw.items() if k in known}
+        return cls(**filtered)
 
     def save(self, path: Path) -> None:
         self.updated_at = _now_iso()
         path.parent.mkdir(parents=True, exist_ok=True)
         d = asdict(self)
-        d["gate_history"] = [g.to_dict() for g in self.gate_history]
         path.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

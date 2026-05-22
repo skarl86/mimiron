@@ -24,6 +24,34 @@ def test_save_and_load_roundtrip(tmp_path: Path) -> None:
     assert loaded.slug == "trip"
     assert loaded.phase == "clarify"
     assert loaded.schema_version == SCHEMA_VERSION
+    # updated_at should be set; with a fresh create() they're equal
+    assert loaded.updated_at >= loaded.created_at
+
+
+def test_gate_history_save_and_load_roundtrip(tmp_path: Path) -> None:
+    from mimiron.state import GateRecord
+    s = State.create(slug="g")
+    s.gate_history.append(
+        GateRecord(
+            phase="clarify",
+            kind="ambiguity",
+            verdict="pass",
+            score=0.10,
+            samples=[0.08, 0.10, 0.12],
+            ts="2026-05-22T00:00:00+00:00",
+        )
+    )
+    p = tmp_path / "state.json"
+    s.save(p)
+    loaded = State.load(p)
+    assert len(loaded.gate_history) == 1
+    g = loaded.gate_history[0]
+    assert g.phase == "clarify"
+    assert g.kind == "ambiguity"
+    assert g.verdict == "pass"
+    assert g.score == 0.10
+    assert g.samples == [0.08, 0.10, 0.12]
+    assert isinstance(g, GateRecord)
 
 
 def test_load_rejects_wrong_schema_version(tmp_path: Path) -> None:
