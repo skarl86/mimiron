@@ -1,0 +1,10 @@
+{
+  "id": "B01-welcome-message-fix",
+  "status": "deferred",
+  "bench_score": null,
+  "test_pass_rate": 1.0,
+  "semantic_similarity": null,
+  "details": {
+    "reason": "similarity_provider not set; manual mode"
+  }
+}
