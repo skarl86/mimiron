@@ -63,6 +63,27 @@ def cmd_ls(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_status(args: argparse.Namespace) -> int:
+    cwd = Path.cwd()
+    state_path = _sidecar_dir(cwd, args.slug) / "state.json"
+    if not state_path.exists():
+        print(f"error: slug {args.slug!r} not found at {state_path}", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+    state = State.load(state_path)
+    persist_tag = "persistent ✓" if state.persistent else "persistent ✗"
+    paused_tag = "  [paused]" if state.paused else ""
+    print(f"{state.slug}  [{persist_tag}]{paused_tag}")
+    print(f"├─ phase:     {state.phase}")
+    print(f"├─ retries:   {dict(state.retries) if state.retries else '(none)'}")
+    print(
+        f"├─ gates:     {len(state.gate_history)} recorded "
+        f"(consecutive_fail={state.consecutive_gate_fails})"
+    )
+    print(f"├─ tokens:    {state.token_usage}")
+    print(f"└─ updated:   {state.updated_at}")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mimiron")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -74,6 +95,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_ls = sub.add_parser("ls", help="list all slugs with phase")
     p_ls.set_defaults(func=cmd_ls)
+
+    p_status = sub.add_parser("status", help="show status of a slug")
+    p_status.add_argument("slug")
+    p_status.set_defaults(func=cmd_status)
 
     return p
 
