@@ -358,6 +358,63 @@ def cmd_commit_task(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_archive(args: argparse.Namespace) -> int:
+    """finalize → done 종착. stop-hook re-entry 방지를 위해 persistent=false."""
+    cwd = Path.cwd()
+    sidecar = _sidecar_dir(cwd, args.slug)
+    state_path = sidecar / "state.json"
+    if not state_path.exists():
+        print(f"error: slug {args.slug!r} not initialized", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+    state = State.load(state_path)
+    if state.phase == "done":
+        # idempotent: archive marker 갱신만, 상태 변화 없음
+        _write_archive_marker(sidecar, state)
+        print(f"already archived: {args.slug}")
+        return EXIT_OK
+    if state.phase != "finalize":
+        print(
+            f"error: slug {args.slug!r} is in phase {state.phase!r}; "
+            "archive requires phase=finalize",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME_ERROR
+    _write_archive_marker(sidecar, state)
+    state.phase = "done"
+    state.persistent = False
+    state.save(state_path)
+    print(f"archived: {args.slug} (phase=done, persistent=false)")
+    return EXIT_OK
+
+
+def _write_archive_marker(sidecar: Path, state: State) -> None:
+    """archive/COMPLETED.json 작성 — 사람·외부 도구가 읽을 종착 신호."""
+    archive_dir = sidecar / "archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    marker = archive_dir / "COMPLETED.json"
+    marker.write_text(
+        _json.dumps(
+            {
+                "schema_version": 1,
+                "slug": state.slug,
+                "final_phase_before_archive": state.phase,
+                "gate_history_count": len(state.gate_history),
+                "completed_task_ids": list(state.completed_task_ids),
+                "completed_at": _now_iso_for_archive(),
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _now_iso_for_archive() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mimiron")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -387,6 +444,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_commit.add_argument("slug")
     p_commit.add_argument("task_id")
     p_commit.set_defaults(func=cmd_commit_task)
+
+    p_archive = sub.add_parser(
+        "archive", help="finalize → done 종착 (persistent loop off)"
+    )
+    p_archive.add_argument("slug")
+    p_archive.set_defaults(func=cmd_archive)
 
     return p
 
