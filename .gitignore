@@ -1,8 +1,13 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-.mimiron/
+.mimiron/*
 !.mimiron/_global/
 *.bak
 .coverage
 htmlcov/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
