@@ -47,16 +47,16 @@ Claude Code 세션에서:
 
 6 phase 파이프라인이 발동: Socratic 명료화 → spec 결정화 → DAG 작성 → 병렬 워커 dispatch → 결정적 게이트 평가 → 커밋 제안. `state.json`이 ledger — hook(과 사용자)이 어느 phase에서든 interrupt 가능.
 
-### 선택: 결정적 CLI
+### 한 단계 더 — CLI 설치 (현재 v0.1.0에선 필수)
 
-위 skill들은 결정적 lane(Python CLI: `mimiron`, `mimiron-bench`)을 호출한다. 직접 명령을 쓰거나(혹은 hook이 `$PATH`에서 찾으려면) 한 번 설치:
+> ⚠️ 현재 skill들은 `mimiron init`, `mimiron gate`, `mimiron commit-task` 등을 Bash 명령으로 호출한다. **`mimiron` CLI가 `$PATH`에 있어야 함** — plugin install만으로는 등록되지 않는다. Fix는 [#15](https://github.com/skarl86/mimiron/issues/15)에서 추적; v0.1.0에선 한 번 설치:
 
 ```bash
 git clone https://github.com/skarl86/mimiron /tmp/mimiron && cd /tmp/mimiron
 uv pip install -e .         # 또는: pip install -e .
 ```
 
-그 다음 새 프로젝트의 mechanical toolchain을 한 줄로 부트스트랩:
+새 프로젝트의 mechanical toolchain을 한 줄로 부트스트랩:
 
 ```bash
 mimiron init my-feature --bootstrap-toolchain=python-uv   # 또는 python-pip | node-npm | go

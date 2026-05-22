@@ -47,16 +47,16 @@ Then in your project, kick off a feature:
 
 The full 6-phase pipeline triggers: Socratic clarification → frozen spec → DAG of tasks → parallel worker dispatch → deterministic gate evaluation → finalize with a commit suggestion. `state.json` is the ledger your hooks (and you) can interrupt at any phase.
 
-### Optional: deterministic CLI
+### One more step — install the CLI (currently required, v0.1.0)
 
-The skills above call a small Python CLI (`mimiron`, `mimiron-bench`) for the deterministic lane. If you want to run those commands yourself (or your hooks need them on `$PATH`), install once:
+> ⚠️ Today the skills above call `mimiron init`, `mimiron gate`, `mimiron commit-task` etc. as Bash commands. **They expect the `mimiron` CLI on `$PATH`** — plugin install alone does *not* put it there. Fix is tracked in [#15](https://github.com/skarl86/mimiron/issues/15); for now run once:
 
 ```bash
 git clone https://github.com/skarl86/mimiron /tmp/mimiron && cd /tmp/mimiron
 uv pip install -e .         # or: pip install -e .
 ```
 
-Then bootstrap a fresh project's mechanical toolchain in one shot:
+Bootstrap a fresh project's mechanical toolchain in one shot:
 
 ```bash
 mimiron init my-feature --bootstrap-toolchain=python-uv   # or python-pip | node-npm | go
