@@ -41,6 +41,28 @@ def cmd_init(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_ls(args: argparse.Namespace) -> int:
+    cwd = Path.cwd()
+    root = cwd / ".mimiron"
+    if not root.exists():
+        print("no slugs (no .mimiron directory)")
+        return EXIT_OK
+    slugs = sorted(p.name for p in root.iterdir() if p.is_dir() and p.name != "_global")
+    if not slugs:
+        print("no slugs")
+        return EXIT_OK
+    print(f"{'SLUG':30}  {'PHASE':10}  {'PERSIST':8}")
+    for slug in slugs:
+        try:
+            state = State.load(root / slug / "state.json")
+        except (FileNotFoundError, ValueError) as e:
+            print(f"{slug:30}  {'corrupted':10}  {'-':8}  ({e})")
+            continue
+        persist = "yes" if state.persistent else "no"
+        print(f"{slug:30}  {state.phase:10}  {persist:8}")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mimiron")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -49,6 +71,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("slug")
     p_init.add_argument("--no-persist", action="store_true", help="disable persistent loop")
     p_init.set_defaults(func=cmd_init)
+
+    p_ls = sub.add_parser("ls", help="list all slugs with phase")
+    p_ls.set_defaults(func=cmd_ls)
 
     return p
 
