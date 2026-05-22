@@ -65,6 +65,53 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0 if v["status"] != "failed" else 1
 
 
+def cmd_compare(args: argparse.Namespace) -> int:
+    cwd = Path.cwd()
+    s1 = cwd / args.dir1
+    s2 = cwd / args.dir2
+    if not s1.exists() or not s2.exists():
+        print("error: directories must both exist", file=sys.stderr)
+        return 2
+    ids = sorted({p.stem for p in s1.glob("*.json")} | {p.stem for p in s2.glob("*.json")})
+    print(f"{'ID':30}  {'OLD':10}  {'NEW':10}  DIFF")
+    for bid in ids:
+        old_path = s1 / f"{bid}.json"
+        new_path = s2 / f"{bid}.json"
+        old = json.loads(old_path.read_text())["bench_score"] if old_path.exists() else None
+        new = json.loads(new_path.read_text())["bench_score"] if new_path.exists() else None
+        old_s = f"{old:.3f}" if old is not None else "  -"
+        new_s = f"{new:.3f}" if new is not None else "  -"
+        diff_s = f"{new - old:+.3f}" if (old is not None and new is not None) else "  -"
+        print(f"{bid:30}  {old_s:10}  {new_s:10}  {diff_s}")
+    return 0
+
+
+def cmd_suite(args: argparse.Namespace) -> int:
+    """v0: list와 동일 출력 + aggregate placeholder."""
+    cwd = Path.cwd()
+    dirs = _benchmark_dirs(cwd)
+    scores: list[float] = []
+    for d in dirs:
+        b = Benchmark.load(d / "benchmark.yaml")
+        status_path = cwd / ".mimiron" / "_outer" / "status" / f"{b.id}.json"
+        if status_path.exists():
+            v = json.loads(status_path.read_text())
+            if v.get("bench_score") is not None:
+                scores.append(v["bench_score"])
+    agg = sum(scores) / len(scores) if scores else None
+    print(
+        json.dumps(
+            {
+                "benchmarks": len(dirs),
+                "scored": len(scores),
+                "suite_aggregate": agg,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mimiron-bench")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -75,6 +122,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_run = sub.add_parser("run")
     p_run.add_argument("id")
     p_run.set_defaults(func=cmd_run)
+
+    p_cmp = sub.add_parser("compare")
+    p_cmp.add_argument("dir1")
+    p_cmp.add_argument("dir2")
+    p_cmp.set_defaults(func=cmd_compare)
+
+    p_suite = sub.add_parser("suite")
+    p_suite.set_defaults(func=cmd_suite)
 
     return p
 
