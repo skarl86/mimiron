@@ -1,0 +1,32 @@
+schema_version: 1
+slug: diamond
+spec_hash: deadbeef
+tasks:
+  - id: T01
+    title: root
+    worker: worker
+    depends_on: []
+    owned_files: [root.py]
+    expected_artifacts: [root.py]
+    timeout_s: 600
+  - id: T02
+    title: left
+    worker: worker
+    depends_on: [T01]
+    owned_files: [left.py]
+    expected_artifacts: [left.py]
+    timeout_s: 600
+  - id: T03
+    title: right
+    worker: worker
+    depends_on: [T01]
+    owned_files: [right.py]
+    expected_artifacts: [right.py]
+    timeout_s: 600
+  - id: T04
+    title: merge
+    worker: worker
+    depends_on: [T02, T03]
+    owned_files: [merge.py]
+    expected_artifacts: [merge.py]
+    timeout_s: 600

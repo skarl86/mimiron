@@ -1,0 +1,18 @@
+schema_version: 1
+slug: cycle
+spec_hash: cafe
+tasks:
+  - id: T01
+    title: a
+    worker: worker
+    depends_on: [T02]
+    owned_files: [a.py]
+    expected_artifacts: [a.py]
+    timeout_s: 600
+  - id: T02
+    title: b
+    worker: worker
+    depends_on: [T01]
+    owned_files: [b.py]
+    expected_artifacts: [b.py]
+    timeout_s: 600
