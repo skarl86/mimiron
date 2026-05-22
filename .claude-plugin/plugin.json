@@ -1,0 +1,8 @@
+{
+  "name": "mimiron",
+  "version": "0.1.0",
+  "description": "Adaptive multi-agent harness for Claude Code with quantitative gates, DAG-based parallel execution, and persistent loop with safety pins.",
+  "author": {
+    "name": "namgee"
+  }
+}

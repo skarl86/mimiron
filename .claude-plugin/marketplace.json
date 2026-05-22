@@ -1,0 +1,10 @@
+{
+  "name": "mimiron",
+  "plugins": [
+    {
+      "name": "mimiron",
+      "source": "./",
+      "description": "Adaptive multi-agent harness"
+    }
+  ]
+}
