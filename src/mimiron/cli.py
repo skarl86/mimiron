@@ -164,6 +164,24 @@ def _read_clarification_score(sidecar: Path) -> tuple[float, list[float]]:
     return score, samples
 
 
+def _maybe_transition(state: State, v: Verdict, sidecar: Path) -> None:
+    """게이트 pass 시 다음 phase로 전이. quality pass 시 spec_hash 박기."""
+    if v.verdict != "pass":
+        return
+    transitions = {
+        ("clarify", "ambiguity"): "spec",
+        ("spec", "quality"): "plan",
+    }
+    next_phase = transitions.get((state.phase, v.kind))
+    if next_phase is None:
+        return
+    if next_phase == "plan":
+        spec_path = sidecar / "spec.yaml"
+        if spec_path.exists():
+            state.spec_hash = Spec.compute_hash(spec_path)
+    state.phase = next_phase
+
+
 def cmd_gate(args: argparse.Namespace) -> int:
     cwd = Path.cwd()
     sidecar = _sidecar_dir(cwd, args.slug)
@@ -246,6 +264,7 @@ def cmd_gate(args: argparse.Namespace) -> int:
         state.consecutive_gate_fails += 1
     elif v.verdict == "pass":
         state.consecutive_gate_fails = 0
+    _maybe_transition(state, v, sidecar)
     state.save(state_path)
     print(_json.dumps({"verdict": v.verdict, "score": v.score, "path": str(verdict_path)}))
     return EXIT_OK if v.verdict != "fail" else EXIT_RUNTIME_ERROR
