@@ -181,6 +181,7 @@ def _maybe_transition(state: State, v: Verdict, sidecar: Path) -> None:
     transitions = {
         ("clarify", "ambiguity"): "spec",
         ("spec", "quality"): "plan",
+        ("evaluate", "semantic"): "finalize",
     }
     next_phase = transitions.get((state.phase, v.kind))
     if next_phase is None:
@@ -226,6 +227,33 @@ def cmd_gate(args: argparse.Namespace) -> int:
                 "band": thresholds.certainty_band,
             },
         )
+    elif args.kind == "semantic":
+        semantic_path = sidecar / "evaluation" / "semantic.json"
+        if not semantic_path.exists():
+            print(
+                f"error: semantic.json missing at {semantic_path}. "
+                "Run evaluate skill first.",
+                file=sys.stderr,
+            )
+            return EXIT_RUNTIME_ERROR
+        try:
+            raw = _json.loads(semantic_path.read_text(encoding="utf-8"))
+        except _json.JSONDecodeError as e:
+            print(f"error: semantic.json invalid JSON: {e}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+        try:
+            v = Verdict.make(
+                slug=args.slug,
+                phase=state.phase,
+                kind="semantic",
+                verdict=raw["verdict"],
+                score=raw.get("score"),
+                samples=list(raw.get("samples", [])),
+                details=raw.get("details", {}),
+            )
+        except (ValueError, KeyError) as e:
+            print(f"error: semantic.json schema invalid: {e}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
     elif args.kind == "quality":
         thresholds = Thresholds.load_or_default(
             cwd / ".mimiron" / "_global" / "thresholds.yaml"
@@ -274,7 +302,11 @@ def cmd_gate(args: argparse.Namespace) -> int:
         state.consecutive_gate_fails += 1
     elif v.verdict == "pass":
         state.consecutive_gate_fails = 0
+    elif v.verdict == "needs_review" and args.kind == "semantic":
+        state.paused = True
     _maybe_transition(state, v, sidecar)
+    if args.kind == "semantic" and state.consecutive_gate_fails >= 3:
+        state.phase = "stuck"
     state.save(state_path)
     print(_json.dumps({"verdict": v.verdict, "score": v.score, "path": str(verdict_path)}))
     return EXIT_OK if v.verdict != "fail" else EXIT_RUNTIME_ERROR
