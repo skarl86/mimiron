@@ -112,6 +112,16 @@ def cmd_scan(args: argparse.Namespace) -> int:
     except PlanError as e:
         print(f"plan invalid: {e}", file=sys.stderr)
         return EXIT_USAGE_ERROR
+    if state.spec_hash is not None and not state.spec_unlocked:
+        if plan.spec_hash != state.spec_hash:
+            state.phase = "stuck"
+            state.save(state_path)
+            print(
+                f"spec_hash mismatch: plan.spec_hash={plan.spec_hash[:8]}, "
+                f"state.spec_hash={state.spec_hash[:8]}. Run unstuck to recover.",
+                file=sys.stderr,
+            )
+            return EXIT_RUNTIME_ERROR
     result = run_scan(plan, state.completed_task_ids, state.in_flight_task_ids)
     print(
         _json.dumps(
