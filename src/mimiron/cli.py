@@ -13,6 +13,7 @@ from mimiron.artifacts import Artifacts, ArtifactError
 from mimiron.gates import run_mechanical_gate
 from mimiron.plan import Plan, PlanError
 from mimiron.scanner import scan as run_scan
+from mimiron.spec import Spec, SpecError
 from mimiron.state import GateRecord, State
 from mimiron.thresholds import Thresholds
 from mimiron.verdict import Verdict
@@ -128,6 +129,27 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _quality_with_penalty(spec: Spec) -> tuple[float, float, dict[str, float]]:
+    """spec.quality_score에 reviewer-ratio 페널티 적용."""
+    raw = spec.quality_score or 0.0
+    total = len(spec.acceptance_criteria)
+    if total == 0:
+        return raw, 0.0, {"reviewer_ratio": 0.0, "penalty": 0.0}
+    reviewer_count = sum(
+        1 for a in spec.acceptance_criteria if a.verify.kind == "reviewer"
+    )
+    ratio = reviewer_count / total
+    penalty = 0.1 if ratio > 0.5 else 0.0
+    return raw - penalty, penalty, {"reviewer_ratio": ratio, "penalty": penalty}
+
+
+def _load_quality_samples(sidecar: Path) -> list[float]:
+    p = sidecar / "quality.samples.json"
+    if not p.exists():
+        return []
+    return [float(x) for x in _json.loads(p.read_text(encoding="utf-8"))]
+
+
 def _read_clarification_score(sidecar: Path) -> tuple[float, list[float]]:
     cm = sidecar / "clarification.md"
     if not cm.exists():
@@ -174,6 +196,39 @@ def cmd_gate(args: argparse.Namespace) -> int:
             details={
                 "threshold": thresholds.ambiguity_max,
                 "band": thresholds.certainty_band,
+            },
+        )
+    elif args.kind == "quality":
+        thresholds = Thresholds.load_or_default(
+            cwd / ".mimiron" / "_global" / "thresholds.yaml"
+        )
+        spec_path = sidecar / "spec.yaml"
+        if not spec_path.exists():
+            print("spec.yaml missing", file=sys.stderr)
+            return EXIT_RUNTIME_ERROR
+        try:
+            spec = Spec.load(spec_path)
+            spec.validate()
+        except SpecError as e:
+            print(f"spec invalid: {e}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+        adj_score, penalty, meta = _quality_with_penalty(spec)
+        samples = _load_quality_samples(sidecar)
+        band_lo = thresholds.spec_quality_min - thresholds.certainty_band
+        band_hi = thresholds.spec_quality_min + thresholds.certainty_band
+        if band_lo <= adj_score <= band_hi:
+            verdict = "needs_review"
+        elif adj_score >= thresholds.spec_quality_min:
+            verdict = "pass"
+        else:
+            verdict = "fail"
+        v = Verdict.make(
+            slug=args.slug, phase=state.phase, kind="quality",
+            verdict=verdict, score=adj_score, samples=samples,
+            details={
+                **meta,
+                "raw": spec.quality_score,
+                "threshold": thresholds.spec_quality_min,
             },
         )
     else:
