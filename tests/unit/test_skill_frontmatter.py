@@ -5,6 +5,7 @@ import yaml
 
 SKILL_PATHS = [
     Path("skills/clarify/SKILL.md"),
+    Path("skills/spec/SKILL.md"),
 ]
 
 
@@ -19,4 +20,10 @@ def test_clarify_skill_frontmatter_has_required_fields() -> None:
     fm = _frontmatter(SKILL_PATHS[0])
     assert "name" in fm and fm["name"] == "mimiron-clarify"
     assert "description" in fm
+    assert len(fm["description"]) > 50
+
+
+def test_spec_skill_frontmatter_has_required_fields() -> None:
+    fm = _frontmatter(SKILL_PATHS[1])
+    assert fm["name"] == "mimiron-spec"
     assert len(fm["description"]) > 50
