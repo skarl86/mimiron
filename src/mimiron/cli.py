@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import json as _json
 import re
 import sys
 from pathlib import Path
 
+from mimiron.plan import Plan, PlanError
+from mimiron.scanner import scan as run_scan
 from mimiron.state import State
 
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
@@ -84,6 +87,41 @@ def cmd_status(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_scan(args: argparse.Namespace) -> int:
+    cwd = Path.cwd()
+    sidecar = _sidecar_dir(cwd, args.slug)
+    state_path = sidecar / "state.json"
+    plan_path = sidecar / "plan.yaml"
+    if not state_path.exists():
+        print(f"error: slug {args.slug!r} not initialized", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+    if not plan_path.exists():
+        print(f"error: plan.yaml not found at {plan_path}", file=sys.stderr)
+        return EXIT_RUNTIME_ERROR
+    state = State.load(state_path)
+    try:
+        plan = Plan.load(plan_path)
+        plan.validate()
+    except PlanError as e:
+        print(f"plan invalid: {e}", file=sys.stderr)
+        return EXIT_USAGE_ERROR
+    result = run_scan(plan, state.completed_task_ids, state.in_flight_task_ids)
+    print(
+        _json.dumps(
+            {
+                "slug": args.slug,
+                "phase": state.phase,
+                "ready": result.ready,
+                "in_flight": result.in_flight,
+                "pending": result.pending,
+                "phase_done": result.phase_done,
+            },
+            indent=2,
+        )
+    )
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mimiron")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -99,6 +137,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("status", help="show status of a slug")
     p_status.add_argument("slug")
     p_status.set_defaults(func=cmd_status)
+
+    p_scan = sub.add_parser("scan", help="compute next ready tasks")
+    p_scan.add_argument("slug")
+    p_scan.set_defaults(func=cmd_scan)
 
     return p
 
