@@ -28,21 +28,39 @@ Named for the [titan keeper of Ulduar](https://wowpedia.fandom.com/wiki/Mimiron)
 
 ## Quick start
 
-```bash
-# Install as a Claude Code plugin (in your project root)
-git clone https://github.com/<you>/mimiron .claude/plugins/mimiron
+In any Claude Code session:
 
-# In a Claude Code session
+```
+/plugin marketplace add skarl86/mimiron
+/plugin install mimiron@skarl86-mimiron
+```
+
+That's it for the plugin install — `/mimiron`, `/mimiron-status`, `/mimiron-resume`, `/mimiron-pause`, and `/mimiron-unstuck` slash commands are now live, along with the 8 skills, 3 worker agents, and 3 hooks (SessionStart / Stop / PostToolUse drift).
+
+Then in your project, kick off a feature:
+
+```
 /mimiron "Add a /version endpoint to the Flask app"
 ```
 
-That single command triggers the full 6-phase pipeline. Mimiron will conduct a Socratic clarification, produce a frozen spec, build a DAG of tasks, dispatch parallel workers, evaluate with deterministic gates, and finalize with a commit suggestion — all while honoring a `state.json` ledger your hooks can interrupt at any phase.
+The full 6-phase pipeline triggers: Socratic clarification → frozen spec → DAG of tasks → parallel worker dispatch → deterministic gate evaluation → finalize with a commit suggestion. `state.json` is the ledger your hooks (and you) can interrupt at any phase.
 
-To bootstrap a fresh project's mechanical toolchain in one shot:
+### Optional: deterministic CLI
+
+The skills above call a small Python CLI (`mimiron`, `mimiron-bench`) for the deterministic lane. If you want to run those commands yourself (or your hooks need them on `$PATH`), install once:
 
 ```bash
-mimiron init my-feature --bootstrap-toolchain=python-uv  # or python-pip | node-npm | go
+git clone https://github.com/skarl86/mimiron /tmp/mimiron && cd /tmp/mimiron
+uv pip install -e .         # or: pip install -e .
 ```
+
+Then bootstrap a fresh project's mechanical toolchain in one shot:
+
+```bash
+mimiron init my-feature --bootstrap-toolchain=python-uv   # or python-pip | node-npm | go
+```
+
+This writes `.mimiron/_global/{mechanical.toml,thresholds.yaml}` from the `evals/` templates so `gate mechanical` works out of the box.
 
 ## The 6-phase pipeline
 

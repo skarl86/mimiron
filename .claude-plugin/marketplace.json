@@ -1,10 +1,31 @@
 {
   "name": "mimiron",
+  "owner": {
+    "name": "skarl86",
+    "url": "https://github.com/skarl86"
+  },
   "plugins": [
     {
       "name": "mimiron",
       "source": "./",
-      "description": "Adaptive multi-agent harness"
+      "description": "Adaptive multi-agent harness for Claude Code with quantitative gates, DAG-based parallel execution, and persistent loop guarded by 14 safety pins.",
+      "version": "0.1.0",
+      "author": {
+        "name": "skarl86",
+        "url": "https://github.com/skarl86"
+      },
+      "category": "development",
+      "homepage": "https://github.com/skarl86/mimiron",
+      "license": "MIT",
+      "keywords": [
+        "harness",
+        "multi-agent",
+        "pipeline",
+        "gates",
+        "dag",
+        "persistent-loop",
+        "self-eval"
+      ]
     }
   ]
 }
