@@ -19,6 +19,10 @@ class Thresholds:
     token_budget: int
     max_parallel_workers: int
     certainty_band: float
+    plan_smells_max_avg_files_per_task: float
+    plan_smells_max_dag_depth: int
+    plan_smells_max_reviewer_ratio: float
+    plan_smells_count_for_needs_review: int
 
     @classmethod
     def defaults(cls) -> "Thresholds":
@@ -33,6 +37,10 @@ class Thresholds:
             token_budget=500_000,
             max_parallel_workers=4,
             certainty_band=0.05,
+            plan_smells_max_avg_files_per_task=5.0,
+            plan_smells_max_dag_depth=5,
+            plan_smells_max_reviewer_ratio=0.3,
+            plan_smells_count_for_needs_review=2,
         )
 
     @classmethod

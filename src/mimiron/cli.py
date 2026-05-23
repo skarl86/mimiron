@@ -12,7 +12,7 @@ import yaml
 
 from mimiron.artifacts import Artifacts, ArtifactError, detect_post_hoc_drift
 from mimiron.gates import run_mechanical_gate
-from mimiron.plan import Plan, PlanError
+from mimiron.plan import Plan, PlanError, detect_plan_smells
 from mimiron.scanner import scan as run_scan
 from mimiron.spec import Spec, SpecError
 from mimiron.state import GateRecord, State
@@ -379,10 +379,24 @@ def cmd_gate(args: argparse.Namespace) -> int:
                     },
                 )
             else:
+                pi_thresholds = Thresholds.load_or_default(
+                    cwd / ".mimiron" / "_global" / "thresholds.yaml"
+                )
+                metrics, smells = detect_plan_smells(plan, pi_thresholds)
+                pi_details: dict[str, Any] = {
+                    "task_count": len(plan.tasks),
+                    "metrics": metrics,
+                }
+                if smells:
+                    pi_details["smells"] = smells
+                if len(smells) >= pi_thresholds.plan_smells_count_for_needs_review:
+                    pi_verdict = "needs_review"
+                else:
+                    pi_verdict = "pass"
                 v = Verdict.make(
                     slug=args.slug, phase=state.phase, kind="plan_integrity",
-                    verdict="pass",
-                    details={"task_count": len(plan.tasks)},
+                    verdict=pi_verdict,
+                    details=pi_details,
                 )
     elif args.kind == "semantic":
         semantic_path = sidecar / "evaluation" / "semantic.json"
