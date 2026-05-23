@@ -39,8 +39,17 @@ def _read_event() -> dict[str, object]:
 def collect_owned_files(plan_yaml_path: Path) -> set[str]:
     """plan.yaml의 모든 task.owned_files의 합집합."""
     try:
-        import yaml
-        raw = yaml.safe_load(plan_yaml_path.read_text(encoding="utf-8")) or {}
+        # Make mimiron.yaml_compat importable from the plugin tree.
+        # Hooks are launched as standalone Python processes, not as part of
+        # the mimiron package — so we extend sys.path before the lazy import.
+        plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(
+            Path(__file__).resolve().parent.parent
+        )
+        src_path = f"{plugin_root}/src"
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        from mimiron.yaml_compat import safe_load
+        raw = safe_load(plan_yaml_path.read_text(encoding="utf-8")) or {}
     except Exception:
         return set()
     owned: set[str] = set()

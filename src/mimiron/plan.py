@@ -5,9 +5,9 @@ import statistics
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-import yaml
 
 from mimiron import SCHEMA_VERSION
+from mimiron import yaml_compat as yaml
 
 if TYPE_CHECKING:
     from mimiron.thresholds import Thresholds

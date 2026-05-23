@@ -8,8 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
-
+from mimiron import yaml_compat as yaml
 from mimiron.artifacts import Artifacts, ArtifactError, detect_post_hoc_drift
 from mimiron.gates import run_mechanical_gate
 from mimiron.plan import Plan, PlanError, detect_plan_smells

@@ -4,7 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, fields as _dc_fields
 from pathlib import Path
 from typing import Any
-import yaml
+
+from mimiron import yaml_compat as yaml
 
 
 @dataclass
