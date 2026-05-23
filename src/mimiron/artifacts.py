@@ -89,3 +89,69 @@ class Artifacts:
                 raise ArtifactError(
                     f"hash mismatch for {f.path!r}: declared={f.post_hash}, actual={actual}"
                 )
+
+
+def detect_post_hoc_drift(
+    sidecar: Path,
+    completed_task_ids: list[str],
+    *,
+    root: Path | None = None,
+) -> list[dict[str, Any]]:
+    """gate artifacts 시점에 declared_files vs 현재 파일 상태를 재검사.
+
+    각 completed task의 `tasks/<task_id>/artifacts.json`을 로드해서
+    declared_files를 순회하며 drift를 감지한다.
+
+    drift 정의:
+      - action != "delete"인데 디스크에 파일이 없음
+      - action != "delete"이고 디스크 sha256가 declared post_hash와 다름
+      - action == "delete"인데 파일이 여전히 존재
+
+    artifacts.json 자체가 없거나 schema 오류로 load 실패한 task는 *skip*한다.
+    (commit-task 시점에서 이미 한 번 검증을 통과했어야 정상 흐름이며,
+    여기서 추가 reject를 발생시키면 기존 회귀 테스트가 깨진다. 빠진 sidecar는
+    plan_integrity/scan 단계가 별도로 잡아낸다.)
+
+    Args:
+        sidecar: ``.mimiron/<slug>`` 경로.
+        completed_task_ids: state.completed_task_ids — drift 검사 대상.
+        root: 파일 비교 기준 root. 기본은 ``sidecar.parent.parent``
+            (즉 ``.mimiron/<slug>/../..`` == project root).
+
+    Returns:
+        drift가 감지된 task만 모은 list. 각 항목은
+        ``{"task_id": str, "files": list[str]}`` 형식. drift가 없으면 빈 list.
+    """
+    if root is None:
+        # sidecar = <cwd>/.mimiron/<slug> → cwd = sidecar.parent.parent
+        root = sidecar.parent.parent
+    drifted: list[dict[str, Any]] = []
+    for tid in completed_task_ids:
+        art_path = sidecar / "tasks" / tid / "artifacts.json"
+        if not art_path.exists():
+            continue
+        try:
+            art = Artifacts.load(art_path)
+        except (ArtifactError, KeyError, ValueError):
+            # 손상된 artifacts.json은 commit-task 시점이 책임진다 — 여기서는 skip.
+            continue
+        bad_files: list[str] = []
+        for f in art.declared_files:
+            target = root / f.path
+            if f.action == "delete":
+                if target.exists():
+                    bad_files.append(f.path)
+                continue
+            if not target.exists():
+                bad_files.append(f.path)
+                continue
+            try:
+                actual = sha256_file(target)
+            except OSError:
+                bad_files.append(f.path)
+                continue
+            if actual != f.post_hash:
+                bad_files.append(f.path)
+        if bad_files:
+            drifted.append({"task_id": tid, "files": bad_files})
+    return drifted

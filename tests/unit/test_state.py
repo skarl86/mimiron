@@ -61,6 +61,36 @@ def test_load_rejects_wrong_schema_version(tmp_path: Path) -> None:
         State.load(p)
 
 
+def test_user_language_defaults_to_none(tmp_path: Path) -> None:
+    s = State.create(slug="lang")
+    assert s.user_language is None
+    p = tmp_path / "state.json"
+    s.save(p)
+    loaded = State.load(p)
+    assert loaded.user_language is None
+
+
+def test_user_language_persisted_when_set(tmp_path: Path) -> None:
+    s = State.create(slug="lang", user_language="Korean")
+    assert s.user_language == "Korean"
+    p = tmp_path / "state.json"
+    s.save(p)
+    loaded = State.load(p)
+    assert loaded.user_language == "Korean"
+
+
+def test_load_legacy_state_without_user_language(tmp_path: Path) -> None:
+    """Existing slugs created before this field must keep loading."""
+    s = State.create(slug="legacy")
+    p = tmp_path / "state.json"
+    s.save(p)
+    raw = json.loads(p.read_text())
+    del raw["user_language"]
+    p.write_text(json.dumps(raw))
+    loaded = State.load(p)
+    assert loaded.user_language is None
+
+
 def test_load_rejects_invalid_phase(tmp_path: Path) -> None:
     s = State.create(slug="x")
     p = tmp_path / "state.json"

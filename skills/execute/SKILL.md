@@ -5,6 +5,10 @@ description: Mimiron 파이프라인의 *director* phase. plan.yaml의 DAG를 dr
 
 # execute — Mimiron Phase 4 (Director)
 
+## 사용자 응답 언어
+
+`.mimiron/<slug>/state.json`의 `user_language` 필드를 *시작 시 한 번* 읽어, 사용자에게 보내는 자연어 산문(진행 알림, dispatch/commit 보고)을 그 언어로 작성한다. `null` 이면 가장 최근 사용자 메시지 언어를 자동 감지해 매칭. **dispatch하는 Agent 프롬프트에도 `user_language: <값>` 한 줄을 명시해 worker/tester가 result.md를 같은 언어로 쓰도록 전달.** *task id, 파일 경로, hash 등 결정적 토큰은 영어 유지.*
+
 ## 진입 조건
 
 - `state.phase == "execute"` (plan_integrity 게이트 통과 직후)

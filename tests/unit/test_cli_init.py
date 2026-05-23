@@ -44,3 +44,23 @@ def test_init_rejects_invalid_slug_with_usage_code(
     monkeypatch.chdir(tmp_project)
     rc = main(["init", "../escape"])
     assert rc == EXIT_USAGE_ERROR
+
+
+def test_init_persists_language_when_provided(
+    tmp_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_project)
+    rc = main(["init", "ko-slug", "--language", "Korean"])
+    assert rc == 0
+    data = json.loads((tmp_project / ".mimiron" / "ko-slug" / "state.json").read_text())
+    assert data["user_language"] == "Korean"
+
+
+def test_init_omits_language_by_default(
+    tmp_project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_project)
+    rc = main(["init", "auto-slug"])
+    assert rc == 0
+    data = json.loads((tmp_project / ".mimiron" / "auto-slug" / "state.json").read_text())
+    assert data["user_language"] is None

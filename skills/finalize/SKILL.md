@@ -5,6 +5,10 @@ description: Mimiron 파이프라인의 *최후* phase. evaluate가 pass(`gate s
 
 # finalize — Mimiron Phase 6 (종착)
 
+## 사용자 응답 언어
+
+`.mimiron/<slug>/state.json`의 `user_language` 필드를 *시작 시 한 번* 읽어, 사용자에게 보내는 자연어 산문(`archive/COMPLETION.md`, commit 메시지 초안 제안, 사용자 알림)을 그 언어로 작성한다. `null` 이면 가장 최근 사용자 메시지 언어를 자동 감지해 매칭. *git 커맨드, 파일 경로, hash, slug는 영어 유지.*
+
 ## 진입 조건
 
 - `state.phase == "finalize"` (semantic gate pass 직후)

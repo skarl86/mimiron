@@ -5,6 +5,10 @@ description: Mimiron self-eval 루프의 *판정자(judge)*. Mimiron이 만든 d
 
 # bench-judge — Mimiron Self-Eval Judge
 
+## 사용자 응답 언어
+
+이 skill의 산출물은 JSON 점수 파일이라 언어 영향이 적지만, 사용자에게 보내는 진행 알림은 호출 컨텍스트에 `user_language` 단서가 있으면 그걸 따른다. 없으면 사용자 메시지 언어를 자동 감지. JSON 키와 score는 영어/숫자 그대로.
+
 ## 언제 발동
 
 - `mimiron-bench run <id>` 이 `status: deferred, reason: similarity_provider not set`을 반환했을 때

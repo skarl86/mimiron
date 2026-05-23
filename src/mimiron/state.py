@@ -61,9 +61,12 @@ class State:
     token_usage: int
     created_at: str
     updated_at: str
+    user_language: str | None = None
 
     @classmethod
-    def create(cls, slug: str, persistent: bool = True) -> "State":
+    def create(
+        cls, slug: str, persistent: bool = True, user_language: str | None = None
+    ) -> "State":
         now = _now_iso()
         return cls(
             schema_version=SCHEMA_VERSION,
@@ -83,6 +86,7 @@ class State:
             token_usage=0,
             created_at=now,
             updated_at=now,
+            user_language=user_language,
         )
 
     @classmethod

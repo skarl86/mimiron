@@ -42,13 +42,14 @@ def test_status_json_emits_valid_object(
     assert isinstance(obj, dict)
     expected = {
         "slug", "phase", "persistent", "paused", "retries",
-        "gate_count", "consecutive_gate_fails", "token_usage", "updated_at",
+        "gate_count", "consecutive_gate_fails", "token_usage", "user_language", "updated_at",
     }
     assert expected <= set(obj)
     assert obj["slug"] == "demo"
     assert obj["phase"] == "clarify"
     assert obj["persistent"] is True
     assert obj["paused"] is False
+    assert obj["user_language"] is None  # default = auto-detect
 
 
 def test_status_without_json_preserves_ascii_tree(
@@ -73,3 +74,47 @@ def test_status_json_missing_slug_nonzero(
     monkeypatch.chdir(tmp_project)
     rc = main(["status", "ghost", "--json"])
     assert rc != 0
+
+
+def test_status_renders_language_line_default_auto(
+    capsys: pytest.CaptureFixture[str],
+    tmp_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """기본 init은 user_language=None → status에서 'language: auto' 표시."""
+    monkeypatch.chdir(tmp_project)
+    main(["init", "demo"])
+    capsys.readouterr()
+    main(["status", "demo"])
+    out = capsys.readouterr().out
+    assert "language:" in out
+    assert "auto" in out
+
+
+def test_status_renders_language_line_when_set(
+    capsys: pytest.CaptureFixture[str],
+    tmp_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--language 명시 시 status에 그 값 그대로 표시."""
+    monkeypatch.chdir(tmp_project)
+    main(["init", "ko-demo", "--language", "Korean"])
+    capsys.readouterr()
+    main(["status", "ko-demo"])
+    out = capsys.readouterr().out
+    assert "language:" in out
+    assert "Korean" in out
+    assert "auto" not in out.split("language:")[1].splitlines()[0]
+
+
+def test_status_json_carries_user_language_when_set(
+    capsys: pytest.CaptureFixture[str],
+    tmp_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_project)
+    main(["init", "ko2", "--language", "Korean"])
+    capsys.readouterr()
+    main(["status", "ko2", "--json"])
+    obj = json.loads(capsys.readouterr().out)
+    assert obj["user_language"] == "Korean"

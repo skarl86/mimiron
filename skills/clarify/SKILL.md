@@ -5,6 +5,10 @@ description: Mimiron 파이프라인의 clarify phase. Socratic 인터뷰로 모
 
 # clarify — Mimiron Phase 1
 
+## 사용자 응답 언어
+
+`.mimiron/<slug>/state.json`의 `user_language` 필드를 *시작 시 한 번* 읽어, 사용자에게 보내는 자연어 산문(질문, 진행 알림, `clarification.md`)을 그 언어로 작성한다. `null` 이면 사용자가 가장 최근에 보낸 메시지의 언어를 자동 감지해 매칭. *코드·식별자·파일 경로·YAML 키·게이트 verdict 같은 결정적 토큰은 영어 유지* — 자연어 산문에만 적용.
+
 ## 진입 조건
 
 - `state.phase == "clarify"` 인 슬러그가 있다 (확인: `mimiron status <slug>`)

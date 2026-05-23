@@ -6,6 +6,10 @@ description: |
 
 # plan — Mimiron Phase 3
 
+## 사용자 응답 언어
+
+`.mimiron/<slug>/state.json`의 `user_language` 필드를 *시작 시 한 번* 읽어, 사용자에게 보내는 자연어 산문(진행 알림, plan.yaml의 `title`·`description` 등 사람이 읽는 텍스트)을 그 언어로 작성한다. `null` 이면 가장 최근 사용자 메시지 언어를 자동 감지해 매칭. *task id, owned_files, worker tier 등 결정적 토큰은 영어 유지* — 자연어 산문에만 적용.
+
 ## 진입 조건
 
 - `state.phase == "plan"` (quality gate 통과 직후)

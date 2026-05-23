@@ -6,10 +6,11 @@ import json as _json
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 import yaml
 
-from mimiron.artifacts import Artifacts, ArtifactError
+from mimiron.artifacts import Artifacts, ArtifactError, detect_post_hoc_drift
 from mimiron.gates import run_mechanical_gate
 from mimiron.plan import Plan, PlanError
 from mimiron.scanner import scan as run_scan
@@ -93,7 +94,11 @@ def cmd_init(args: argparse.Namespace) -> int:
             return EXIT_USAGE_ERROR
         _bootstrap_global(cwd, args.bootstrap_toolchain)
     sidecar.mkdir(parents=True)
-    state = State.create(slug=args.slug, persistent=not args.no_persist)
+    state = State.create(
+        slug=args.slug,
+        persistent=not args.no_persist,
+        user_language=args.language,
+    )
     state.save(sidecar / "state.json")
     print(f"initialized {args.slug} at {sidecar}")
     return EXIT_OK
@@ -140,6 +145,7 @@ def cmd_status(args: argparse.Namespace) -> int:
                     "gate_count": len(state.gate_history),
                     "consecutive_gate_fails": state.consecutive_gate_fails,
                     "token_usage": state.token_usage,
+                    "user_language": state.user_language,
                     "updated_at": state.updated_at,
                 }
             )
@@ -147,8 +153,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         return EXIT_OK
     persist_tag = "persistent ✓" if state.persistent else "persistent ✗"
     paused_tag = "  [paused]" if state.paused else ""
+    lang_display = state.user_language if state.user_language else "auto"
     print(f"{state.slug}  [{persist_tag}]{paused_tag}")
     print(f"├─ phase:     {state.phase}")
+    print(f"├─ language:  {lang_display}")
     print(f"├─ retries:   {dict(state.retries) if state.retries else '(none)'}")
     print(
         f"├─ gates:     {len(state.gate_history)} recorded "
@@ -311,10 +319,25 @@ def cmd_gate(args: argparse.Namespace) -> int:
             return EXIT_RUNTIME_ERROR
         result = run_scan(plan, state.completed_task_ids, state.in_flight_task_ids)
         if result.phase_done:
+            # post-hoc drift 재검사: declared_files post_hash vs 현재 디스크 상태.
+            # commit-task 시점 이후 사용자 또는 다른 task가 파일을 바꾼 경우를
+            # 잡아낸다. drift task 수에 따라 verdict 등급이 달라진다.
+            drift = detect_post_hoc_drift(
+                sidecar, state.completed_task_ids, root=cwd
+            )
+            if len(drift) >= 2:
+                verdict = "fail"
+            elif len(drift) == 1:
+                verdict = "needs_review"
+            else:
+                verdict = "pass"
+            details: dict[str, Any] = {"completed_count": len(state.completed_task_ids)}
+            if drift:
+                details["drift"] = drift
             v = Verdict.make(
                 slug=args.slug, phase=state.phase, kind="artifacts",
-                verdict="pass",
-                details={"completed_count": len(state.completed_task_ids)},
+                verdict=verdict,
+                details=details,
             )
         else:
             v = Verdict.make(
@@ -602,6 +625,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Also write .mimiron/_global/{mechanical.toml,thresholds.yaml} if absent. "
             "Choose one of python-uv|python-pip|node-npm|go."
+        ),
+    )
+    p_init.add_argument(
+        "--language",
+        dest="language",
+        default=None,
+        help=(
+            "Human language Mimiron uses when speaking to the user during this slug "
+            "(e.g. 'Korean', 'English'). Omit for auto-detect each session."
         ),
     )
     p_init.set_defaults(func=cmd_init)

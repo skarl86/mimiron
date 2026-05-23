@@ -6,6 +6,10 @@ description: |
 
 # unstuck — Mimiron Safety Pin
 
+## 사용자 응답 언어
+
+`.mimiron/<slug>/state.json`의 `user_language` 필드를 *시작 시 한 번* 읽어, `unstuck.md` 보고서와 사용자 대화 모두를 그 언어로 작성한다. `null` 이면 가장 최근 사용자 메시지 언어를 자동 감지. *phase 이름, gate 종류, task id는 영어 유지.*
+
 ## 진입 조건
 
 - `state.phase == "stuck"` *또는*
