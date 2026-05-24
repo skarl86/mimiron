@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -79,13 +80,71 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 2
     work_root = cwd / ".mimiron" / "_bench"
     work_root.mkdir(parents=True, exist_ok=True)
+    swebench_tests = getattr(args, "swebench_tests", False)
     try:
         from mimiron.bench.runner import run_benchmark
-        v = run_benchmark(
-            benchmark=b,
-            work_root=work_root,
-            similarity_provider=similarity_provider,
-        )
+        if swebench_tests:
+            from mimiron.bench.runner import _find_candidate_diff
+            from mimiron.bench.scorer import compute_bench_score
+            from mimiron.bench.swebench_runner import run_swebench_tests
+            from mimiron.bench.worktree_iso import isolate_at_ref
+
+            meta_path = bench_dir / (b.swebench_meta or "_swebench.json")
+            if not meta_path.exists():
+                print(f"error: --swebench-tests requires {meta_path}", file=sys.stderr)
+                return 2
+
+            candidate_path = _find_candidate_diff(work_root=work_root, bench_id=b.id)
+            candidate_text = (
+                candidate_path.read_text(encoding="utf-8") if candidate_path else ""
+            )
+
+            repo = Path(b.repo)
+            if not repo.is_absolute():
+                repo = (b.yaml_dir / repo).resolve()
+
+            apply_status = "no_candidate"
+            with isolate_at_ref(repo=repo, ref=b.base_ref, dest=work_root / b.id) as iso:
+                if candidate_path:
+                    apply_proc = subprocess.run(
+                        ["git", "apply", "--whitespace=nowarn", str(candidate_path)],
+                        cwd=iso, capture_output=True, text=True, check=False,
+                    )
+                    apply_status = "applied" if apply_proc.returncode == 0 else "apply_failed"
+                rate, details = run_swebench_tests(meta_path=meta_path, repo_root=iso)
+
+            sim = (
+                similarity_provider(candidate_text, b.expected_diff())
+                if similarity_provider else None
+            )
+            resolved = (rate == 1.0)
+            # Spec §7 hybrid formula (collapse to test-only when sim is None)
+            if sim is not None:
+                score = compute_bench_score(
+                    test_pass_rate=rate, semantic_similarity=sim,
+                    w_test=0.6, w_sim=0.4,
+                )
+            else:
+                score = rate
+            v = {
+                "id": b.id,
+                "status": "passed" if (resolved and score >= 0.75) else "failed",
+                "bench_score": score,
+                "test_pass_rate": rate,
+                "semantic_similarity": sim,
+                "details": {
+                    "resolved": resolved,
+                    "apply_status": apply_status,
+                    "candidate_found": candidate_path is not None,
+                    "swebench": details,
+                },
+            }
+        else:
+            v = run_benchmark(
+                benchmark=b,
+                work_root=work_root,
+                similarity_provider=similarity_provider,
+            )
     except Exception as e:
         print(json.dumps({"id": b.id, "status": "failed", "error": str(e)}))
         return 4
@@ -196,6 +255,12 @@ def build_parser() -> argparse.ArgumentParser:
         dest="similarity_from",
         default=None,
         help="외부에서 미리 산출한 judge JSON 경로 (score+rationale).",
+    )
+    p_run.add_argument(
+        "--swebench-tests",
+        dest="swebench_tests",
+        action="store_true",
+        help="SWE-bench fixture 의 _swebench.json 의 selector 로 test_pass_rate 측정.",
     )
     p_run.set_defaults(func=cmd_run)
 
