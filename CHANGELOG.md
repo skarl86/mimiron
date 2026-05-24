@@ -2,6 +2,18 @@
 
 All notable changes to Mimiron. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · semver: [`MAJOR.MINOR.PATCH`](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **SWE-bench Lite adapter (PoC)**: `mimiron-bench swebench import` subcommand 가 HuggingFace 또는 로컬 JSONL 에서 SWE-bench Lite 의 stratified subset (default 20개) 을 `benchmarks/SWE-LITE-XX/` fixture 로 변환. Difficulty 는 patch size + test count + touched files 의 quantile 로 결정, repo diversity 는 `max_per_repo=4` 기본값으로 제한.
+- **`--clarification-from <file>` flag** on `mimiron init`: 외부 clarification.md 직주입 → clarify phase skip + phase=spec 점프. SWE-bench problem_statement 같이 이미 자세한 input 에서 LLM 호출 회피.
+- **`mimiron-bench run --swebench-tests` flag**: `_swebench.json` 의 `FAIL_TO_PASS` + `PASS_TO_PASS` pytest selector 를 candidate-applied 워크트리에서 실행 → `test_pass_rate` 산출. Hybrid verdict (`resolved` + `bench_score`) 동시 기록.
+- **`mimiron-swebench` skill + `/mimiron-swebench` slash command**: SWE-bench Lite suite 순회 실행 + `.mimiron/_outer/swebench/REPORT.md` 집계.
+- **`[swebench]` optional extra** (`pip install -e '.[swebench]'`) for HuggingFace `datasets` dependency. Core 의존성 영향 없음.
+
+### Spec
+- `docs/superpowers/specs/2026-05-24-swebench-lite-adapter-design.md`
+
 ## [v0.1.0] — 2026-05-23 — **Form complete**
 
 The full spec § 4.1 layout exists, every phase transition is automated, two dogfood runs (defect-finding + verification) closed the feedback loop with zero remaining workarounds.
@@ -81,7 +93,7 @@ Six issues closed (#20-#25). Full retrospective in `dogfood/006-v030-wrap.md`.
 - User-language threading + gate(artifacts) `needs_review` band
 - Hooks routed through `CLAUDE_PLUGIN_ROOT` + `CLAUDE_PROJECT_DIR`
 
-## [Unreleased] — toward v1.0.0 (function complete)
+## Roadmap — toward v1.0.0 (function complete)
 
 - `mimiron-bench suite_aggregate ≥ 0.75` with real LLM judge across ≥ 3 benchmarks (cutoff_global)
 - ≥ 3 benchmarks `passed` (deferred → real verdict)
