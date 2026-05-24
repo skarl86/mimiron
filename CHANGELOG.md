@@ -60,12 +60,19 @@ Plus `unstuck` as the personified safety mechanism — human-in-the-loop recover
 - `spec/SKILL.md` adds verify-kind field table + hypothesis schema
 - `agents/mimiron-worker.md` corrects `python3` to `.venv/bin/python` for module-import recipe
 
-## [Unreleased] — toward v0.2.0
+## [Unreleased] — toward v0.3.0
+
+- (issues land here as v0.3.0 milestone closes — see milestone v0.3.0 on GitHub)
+
+## [v0.2.0] — 2026-05-24 — **Bench foundation**
 
 - B04 + B05 benchmark curation (diversify suite signal: hard fix, feat)
 - Interactive dogfood with real LLM judge (run `mimiron-bench-judge <id>` skill on real session)
 - Plan_integrity / artifacts gate `needs_review` band handling (currently only pass/fail)
 - Drift hook upgrade: v0 warn → v1 reject (PostToolUse decision=block)
+- Plugin self-contained `/mimiron` entry (no external skill dependency)
+- User-language threading + gate(artifacts) `needs_review` band
+- Hooks routed through `CLAUDE_PLUGIN_ROOT` + `CLAUDE_PROJECT_DIR`
 
 ## [Unreleased] — toward v1.0.0 (function complete)
 
