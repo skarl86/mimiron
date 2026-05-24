@@ -59,3 +59,8 @@ description: Mimiron 파이프라인의 *최후* phase. evaluate가 pass(`gate s
 
 - `mimiron-bench run` self-eval 굴려 *방금 만든 변경*이 benchmark suite에 어떻게
   반영되는지 outer-loop 단에서 측정 가능.
+
+  ⚠️ `mimiron-bench run` 은 Mimiron pipeline 을 *재실행* 하지 않는다 (v0.3.0 #24).
+  방금 만든 변경의 diff 를 `.mimiron/_bench/_input/<id>.diff` 로 둬야 candidate-applied
+  test 측정이 그 변경을 본다. 자세한 갭 설명: skills/bench-judge/SKILL.md §"What
+  `mimiron-bench run` does NOT do".

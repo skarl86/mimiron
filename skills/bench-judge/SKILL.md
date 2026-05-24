@@ -15,6 +15,25 @@ description: Mimiron self-eval 루프의 *판정자(judge)*. Mimiron이 만든 d
 - 사용자가 `bench-judge <id>` 또는 동등 요청을 했을 때
 - Outer ralph-loop이 deferred 케이스를 unstuck하려 할 때
 
+## What `mimiron-bench run` does NOT do (v0.3.0 #24)
+
+`mimiron-bench run <id>` 는 **Mimiron pipeline (clarify→spec→plan→execute→evaluate→finalize) 을 트리거하지 않는다**. 실제 행동:
+
+1. `repo` 워크트리 격리 — deferred 모드 = `target_ref` / candidate 모드 = `base_ref + git apply <candidate>`
+2. `test_command` 실행 → `test_pass_rate` 산출
+3. `--similarity-from <judge.json>` 이 있으면 그 파일에서 `score` 를 읽어 `bench_score` + verdict 산출
+4. 워크트리 정리
+
+따라서 *candidate diff 는 외부에서 미리 공급* 해야 한다. 권장 경로:
+
+- `.mimiron/_bench/_input/<id>.diff` (신규 권장, per-bench)
+- `.mimiron/_bench/<id>/mimiron_output.diff` (legacy, dogfood/005 convention)
+- `.mimiron/mimiron_output.diff` (legacy global, single-bench 한정)
+
+Mimiron pipeline 의 산출 diff 를 이 위치 중 하나에 두면 `mimiron-bench run --similarity-from <judge.json>` 이 그것을 base_ref 에 apply 해서 *진짜* test_pass_rate 를 측정한다 (v0.3.0 #20).
+
+이 갭은 본 skill 의 책임 영역 밖이지만, judge 작성 직전에 사용자가 가끔 "왜 run 이 candidate 를 만들지 않지?" 라고 묻는다 — 위 설명을 인용해 답한다.
+
 ## 진입 조건
 
 - `benchmarks/<bench_id>/expected.diff` 가 존재

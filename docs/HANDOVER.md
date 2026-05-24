@@ -80,7 +80,12 @@ Mimiron은 Claude Code용 *멀티 에이전트 하네스 플러그인*이다. 6-
 
 # Self-eval
 .venv/bin/mimiron-bench list
-.venv/bin/mimiron-bench run <id>
+.venv/bin/mimiron-bench run <id>          # NOTE: does NOT trigger Mimiron pipeline.
+                                          # Just isolates a worktree, applies a candidate
+                                          # diff (when --similarity-from is set), and runs
+                                          # test_command. Candidate must be pre-supplied at
+                                          # .mimiron/_bench/_input/<id>.diff. See bench-judge
+                                          # SKILL §"What 'run' does NOT do" for the full gap.
 .venv/bin/mimiron-bench suite
 .venv/bin/mimiron-bench compare <dir1> <dir2>
 
