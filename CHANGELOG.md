@@ -60,7 +60,9 @@ Plus `unstuck` as the personified safety mechanism — human-in-the-loop recover
 - `spec/SKILL.md` adds verify-kind field table + hypothesis schema
 - `agents/mimiron-worker.md` corrects `python3` to `.venv/bin/python` for module-import recipe
 
-## [Unreleased] — toward v0.3.0
+## [v0.3.0] — 2026-05-24 — **Judge hardening + bench score gate**
+
+Six issues closed (#20-#25). Full retrospective in `dogfood/006-v030-wrap.md`.
 
 - `benchmarks/_CURATION_GUIDE.md` — 5-rule guide for `issue.md` root-cause hint level + B01 retroactive signal boost (#25)
 - bench-judge: J5 (apply-check) dimension — `git apply --check` against base_ref as deterministic 5th rubric, optional `apply_check` JSON field, backward-compat fallback to 4-dim mean (#21)
