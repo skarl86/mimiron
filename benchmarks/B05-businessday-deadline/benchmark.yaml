@@ -1,0 +1,21 @@
+id: B05-businessday-deadline
+repo: ../../.bench-clones/workspace
+base_ref: a1f9d134bf2452db49ba954ab089e9ec906265b3
+target_ref: dc77cba548b0c10e63e94d9d9d7300c9b87dff6c
+issue_text_file: issue.md
+expected_diff_file: expected.diff
+test_command: 'python3 -c "import os, sys; root=''agents/naver-smartstore''; ok = os.path.exists(f''{root}/app/business_hours.py'') and os.path.exists(f''{root}/app/services/cancellation_deadline.py'') and ''def compute_cancellation_deadline'' in open(f''{root}/app/services/cancellation_deadline.py'').read() and ''def is_business_day'' in open(f''{root}/app/utils.py'').read(); sys.exit(0 if ok else 1)"'
+difficulty: medium
+notes: |
+  원본 PR: ts-cxdm/workspace#2061 — feat(smartstore): 취소 접수 마감일 영업일 보정
+  base→target 사이 변경: 18개 파일 (agents/ 한정), +1630 / -19 (전체 PR 기준)
+  주요 변경:
+    - 신규 app/business_hours.py: BUSINESS_START/BUSINESS_END SSOT
+    - 신규 app/services/cancellation_deadline.py: compute_cancellation_deadline 순수 함수
+      + calculate_cancellation_deadline LLM 도구
+    - app/utils.py: is_business_day / last_business_day_on_or_before 추가 (holidays 라이브러리 기반)
+    - cancel_refund/product 라우터에 도구 등록 + 프롬프트 갱신 (직접 날짜 계산 금지)
+  feat 특성: 기능 자체가 base 에 *없음* — 신규 파일/함수 등장 여부가 fix signal.
+  test_command 전략: 4 durable signal (신규 파일 2 + 신규 함수 2) AND 매칭.
+  expected.diff 는 'agents/' pathspec 으로 제한 — 동일 PR 의 docs/superpowers/plans/
+  1075줄 plan doc 은 judge 공정성 위해 제외.

@@ -1,0 +1,842 @@
+diff --git a/agents/naver-smartstore/app/business_hours.py b/agents/naver-smartstore/app/business_hours.py
+new file mode 100644
+index 0000000..0ee63c7
+--- /dev/null
++++ b/agents/naver-smartstore/app/business_hours.py
+@@ -0,0 +1,19 @@
++"""업무시간 SSOT(Single Source of Truth).
++
++평일(월~금) 09:30~17:30 KST. 프롬프트·라우터·서비스는 업무시간을 직접 문자열로
++적지 않고 모두 이 모듈을 참조한다. 영업일·취소 마감일 계산도 여기 정의된
++BUSINESS_END·BUSINESS_WEEKDAYS 를 기준으로 한다.
++"""
++
++import datetime
++
++# datetime.weekday(): 월=0, 화=1, 수=2, 목=3, 금=4, 토=5, 일=6
++BUSINESS_WEEKDAYS: frozenset[int] = frozenset({0, 1, 2, 3, 4})
++
++BUSINESS_START: datetime.time = datetime.time(9, 30)
++BUSINESS_END: datetime.time = datetime.time(17, 30)
++
++
++def format_business_hours() -> str:
++    """프롬프트·응답에 노출할 업무시간 문자열. 예: '평일(월~금) 09:30~17:30 KST'."""
++    return f"평일(월~금) {BUSINESS_START:%H:%M}~{BUSINESS_END:%H:%M} KST"
+diff --git a/agents/naver-smartstore/app/prompts/cancel_refund.md b/agents/naver-smartstore/app/prompts/cancel_refund.md
+index b9a679d..6eb354a 100644
+--- a/agents/naver-smartstore/app/prompts/cancel_refund.md
++++ b/agents/naver-smartstore/app/prompts/cancel_refund.md
+@@ -32,6 +32,16 @@
+ - 상품 상세에 기재된 취소 조건, 환불 가능 여부, 주의사항을 빠짐없이 전달합니다.
+ - 상품 정보에 없는 내용을 추측하거나 보충하지 않습니다.
+ 
++## 취소 마감일 계산 규칙
++- 취소 마감 "날짜"를 구체적으로 안내해야 하는 질문(예: "언제까지 취소", "며칠 전까지 취소")에는 직접 날짜를 계산하지 않습니다.
++- `[참조 상품 정보]` 또는 대화에서 (1) 이용일과 (2) "이용일 N일 전까지 취소" 규정을 모두 확인했으면, 반드시 `calculate_cancellation_deadline` 도구를 호출해 마감일을 구합니다.
++  - `tour_date`: 이용일을 'YYYY-MM-DD'로 변환해 전달합니다. "26일"처럼 날짜의 일(日)만 언급돼도 시스템에 주입된 현재 한국 시간 기준으로 가장 가까운 날짜로 직접 해석하며, 연·월을 사용자에게 되묻지 않습니다.
++  - `days_before`: 규정의 "N일 전"에서 N(정수).
++- 도구 결과의 `text`를 근거로 안내하고, 날짜·시각은 `deadline_date`·`deadline_time`을 그대로 사용합니다.
++- 도구가 `adjusted: true`를 반환하면 단순 달력상 날짜가 주말·공휴일이라 직전 영업일로 당겨졌다는 의미입니다. 반드시 보정된 `deadline_date`로 안내합니다.
++- 도구를 거치지 않고 "N일 전" 날짜를 직접 계산해 안내하지 않습니다. 주말·공휴일 보정 누락 오류의 원인이 됩니다.
++- 대화에 이용일이 전혀 언급되지 않은 경우에만 이용일을 질문합니다. 일(日)만 언급된 경우(예: "26일")는 확인된 것으로 간주해 되묻지 말고, 현재 날짜 기준으로 해석해 도구를 호출합니다.
++
+ ## 이메일 미기재로 인한 취소·재구매 의향 처리
+ - 사용자가 "이메일을 안 적었다", "메일 미기재", "메일 잘못 입력" 등의 발화와 함께 "취소하고 재구매", "다시 주문", "재구매" 같은 의향을 함께 보이면, 아래를 함께 안내합니다.
+   - `[참조 상품 정보]`의 `[바우처 발송 안내]` 또는 환불 규정에 명시된 내용을 인용.
+diff --git a/agents/naver-smartstore/app/prompts/product.md b/agents/naver-smartstore/app/prompts/product.md
+index 045a1de..ccc0acf 100644
+--- a/agents/naver-smartstore/app/prompts/product.md
++++ b/agents/naver-smartstore/app/prompts/product.md
+@@ -52,6 +52,16 @@
+ ## 오인 정정 규칙
+ - 사용자가 "~안해도 되죠?", "~없죠?", "~맞죠?" 등으로 사실과 다른 가정을 확인하면, 요약의 첫 단어를 반드시 "아니요,"로 시작해 정정합니다. 잘못된 가정에 "네"로 동의하는 것은 금지입니다.
+ 
++## 취소 마감일 계산 규칙
++- 취소 마감 "날짜"를 구체적으로 안내해야 하는 질문(예: "언제까지 취소", "며칠 전까지 취소")에는 직접 날짜를 계산하지 않습니다.
++- `[참조 상품 정보]` 또는 대화에서 (1) 이용일과 (2) "이용일 N일 전까지 취소" 규정을 모두 확인했으면, 반드시 `calculate_cancellation_deadline` 도구를 호출해 마감일을 구합니다.
++  - `tour_date`: 이용일을 'YYYY-MM-DD'로 변환해 전달합니다. "26일"처럼 날짜의 일(日)만 언급돼도 시스템에 주입된 현재 한국 시간 기준으로 가장 가까운 날짜로 직접 해석하며, 연·월을 사용자에게 되묻지 않습니다.
++  - `days_before`: 규정의 "N일 전"에서 N(정수).
++- 도구 결과의 `text`를 근거로 안내하고, 날짜·시각은 `deadline_date`·`deadline_time`을 그대로 사용합니다.
++- 도구가 `adjusted: true`를 반환하면 단순 달력상 날짜가 주말·공휴일이라 직전 영업일로 당겨졌다는 의미입니다. 반드시 보정된 `deadline_date`로 안내합니다.
++- 도구를 거치지 않고 "N일 전" 날짜를 직접 계산해 안내하지 않습니다. 주말·공휴일 보정 누락 오류의 원인이 됩니다.
++- 대화에 이용일이 전혀 언급되지 않은 경우에만 이용일을 질문합니다. 일(日)만 언급된 경우(예: "26일")는 확인된 것으로 간주해 되묻지 말고, 현재 날짜 기준으로 해석해 도구를 호출합니다.
++
+ ## 응답 작성 규칙
+ - 응답 구조는 반드시 `요약 → 상세 → 변동 고지 → 마무리` 순서를 따릅니다.
+ - 요약: 문의 핵심에 대한 1~2문장 결론. 사용자의 가정이 틀렸다면 "아니요,"로 시작
+diff --git a/agents/naver-smartstore/app/prompts/system_base.md b/agents/naver-smartstore/app/prompts/system_base.md
+index 4f71857..99b47a7 100644
+--- a/agents/naver-smartstore/app/prompts/system_base.md
++++ b/agents/naver-smartstore/app/prompts/system_base.md
+@@ -19,7 +19,7 @@
+ ## 시간·로캘
+ - 모든 시간은 한국 시간(KST, Asia/Seoul) 기준으로 설명합니다.
+ - 상대 날짜 표현은 시스템에 주입된 오늘 날짜 기준 절대 날짜로 해석합니다.
+-- 업무시간은 평일(월~금) 09:30~17:30 KST 입니다.
++- 업무시간은 {business_hours} 입니다.
+ 
+ ## 응답 스타일
+ - 한국어로 답변합니다.
+@@ -78,5 +78,5 @@
+ ### 채팅에서 직접 처리할 수 없는 항목 (상담원 연결이 유일한 경로)
+ - 다음 항목은 AI/채팅에서 직접 처리·수정할 수 없으며, 상담원 연결이 유일한 처리 경로입니다.
+   - 주문에 기재된 이메일 주소 등 수신자 정보의 변경
+-- 사용자가 위 항목의 변경·처리를 원하거나 그럴 필요가 드러나면, 응답에 상담원 연결 안내(평일 영업시간 09:30~17:30 KST)를 포함합니다. 자연어로 자연스럽게 녹여 씁니다.
++- 사용자가 위 항목의 변경·처리를 원하거나 그럴 필요가 드러나면, 응답에 상담원 연결 안내({business_hours})를 포함합니다. 자연어로 자연스럽게 녹여 씁니다.
+ - 이는 "AI가 먼저 상담사 연결을 제안하지 않는다"는 의도별 규칙의 **예외**입니다. 처리 가능한 일을 떠넘기는 것이 아니라, 해당 요청의 유일한 처리 경로를 안내하는 것이므로 어느 의도에서든 포함합니다.
+diff --git a/agents/naver-smartstore/app/routers/cancel_refund.py b/agents/naver-smartstore/app/routers/cancel_refund.py
+index 24a1f5c..0dc08ba 100644
+--- a/agents/naver-smartstore/app/routers/cancel_refund.py
++++ b/agents/naver-smartstore/app/routers/cancel_refund.py
+@@ -8,12 +8,14 @@ from langchain_openai import ChatOpenAI
+ from langgraph.prebuilt import create_react_agent
+ 
+ from app.agent import get_langfuse_config
++from app.business_hours import format_business_hours
+ from app.config import settings
+ from app.logger_config import get_logger
+ from app.masking import mask_sensitive_identifiers
++from app.services.cancellation_deadline import calculate_cancellation_deadline
+ from app.services.order_context import format_order_context_block
+ from app.services.voucher_guidance import render_prompt_template
+-from app.utils import get_current_kst_time
++from app.utils import build_time_context
+ 
+ logger = get_logger(__name__)
+ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
+@@ -53,7 +55,10 @@ def _build_call_counselor_tool(context_id: str):
+ 
+         return {
+             "success": True,
+-            "message": "상담사에게 문의를 전달했습니다. 빠른 시간 내에 연락드리겠습니다. (근무시간: 평일 09:30~17:30)",
++            "message": (
++                "상담사에게 문의를 전달했습니다. 빠른 시간 내에 연락드리겠습니다. "
++                f"(근무시간: {format_business_hours()})"
++            ),
+         }
+ 
+     return call_counselor
+@@ -77,12 +82,7 @@ async def handle_cancel_refund_intent(
+     system_base = _load_prompt("system_base.md")
+     cancel_prompt = _load_prompt("cancel_refund.md")
+ 
+-    now_kst = get_current_kst_time()
+-    time_context = (
+-        f"\n[현재 한국 시간: {now_kst.strftime('%Y-%m-%d %H:%M KST')}]"
+-        "\n[업무시간: 평일(월~금) 09:30~17:30 KST]"
+-    )
+-    system_content = f"{system_base}\n\n{cancel_prompt}{time_context}"
++    system_content = f"{system_base}\n\n{cancel_prompt}{build_time_context()}"
+ 
+     if product_context:
+         system_content += f"\n\n[참조 상품 정보]\n{product_context}"
+@@ -97,7 +97,7 @@ async def handle_cancel_refund_intent(
+ 
+     agent = create_react_agent(
+         llm,
+-        tools=[_build_call_counselor_tool(context_id)],
++        tools=[_build_call_counselor_tool(context_id), calculate_cancellation_deadline],
+         prompt=system_content,
+     )
+ 
+diff --git a/agents/naver-smartstore/app/routers/product.py b/agents/naver-smartstore/app/routers/product.py
+index a91c9a3..8e7c2eb 100644
+--- a/agents/naver-smartstore/app/routers/product.py
++++ b/agents/naver-smartstore/app/routers/product.py
+@@ -11,8 +11,10 @@ from app.agent import get_langfuse_config
+ from app.config import settings
+ from app.logger_config import get_logger
+ from app.masking import mask_sensitive_identifiers
++from app.services.cancellation_deadline import calculate_cancellation_deadline
+ from app.services.order_context import format_order_context_block
+ from app.services.voucher_guidance import ensure_voucher_guidance, render_prompt_template
++from app.utils import build_time_context
+ 
+ logger = get_logger(__name__)
+ 
+@@ -150,7 +152,7 @@ async def handle_product_intent(
+ 
+     system_base = _load_prompt("system_base.md")
+     product_prompt = _load_prompt("product.md")
+-    system_content = f"{system_base}\n\n{product_prompt}"
++    system_content = f"{system_base}\n\n{product_prompt}{build_time_context()}"
+ 
+     if product_context:
+         system_content += f"\n\n[참조 상품 정보]\n{product_context}"
+@@ -181,7 +183,7 @@ async def handle_product_intent(
+ 
+     agent = create_react_agent(
+         llm,
+-        tools=[get_product_info, quote_price],
++        tools=[get_product_info, quote_price, calculate_cancellation_deadline],
+         prompt=system_content,
+     )
+ 
+diff --git a/agents/naver-smartstore/app/services/cancellation_deadline.py b/agents/naver-smartstore/app/services/cancellation_deadline.py
+new file mode 100644
+index 0000000..e4cd43f
+--- /dev/null
++++ b/agents/naver-smartstore/app/services/cancellation_deadline.py
+@@ -0,0 +1,95 @@
++"""취소 접수 마감일 영업일 보정 — 순수 계산 + LLM 도구.
++
++'이용일 N일 전까지 취소' 규정에서 단순 (이용일 - N일)이 주말·공휴일이면
++직전 영업일로 당겨 실제 접수 마감일을 결정한다. 날짜 산술·요일 판정은 코드가
++결정론적으로 담당하고, LLM 은 이용일·기준일수 추출만 맡는다.
++"""
++
++import datetime
++from typing import Any
++
++from langchain_core.tools import tool
++
++from app.business_hours import BUSINESS_END
++from app.logger_config import get_logger
++from app.utils import last_business_day_on_or_before
++
++logger = get_logger(__name__)
++
++_WEEKDAY_KR: tuple[str, ...] = ("월", "화", "수", "목", "금", "토", "일")
++
++
++def compute_cancellation_deadline(tour_date: datetime.date, days_before: int) -> dict[str, Any]:
++    """이용일과 취소 기준일 수로 영업일 보정된 취소 접수 마감일을 계산합니다.
++
++    Args:
++        tour_date: 이용일(투어 날짜).
++        days_before: 취소 가능 기준일 수("이용일 N일 전까지").
++
++    Returns:
++        deadline_date: 영업일 보정된 실제 마감일 (ISO 'YYYY-MM-DD').
++        deadline_time: 마감 시각 'HH:MM' (업무 종료 시각).
++        calendar_date: 보정 전 단순 계산일 (ISO 'YYYY-MM-DD').
++        adjusted: 주말·공휴일 보정이 일어났으면 True.
++        weekday_kr: deadline_date 의 한글 요일.
++        text: 사람이 읽는 한 줄 안내문.
++    """
++    calendar_date = tour_date - datetime.timedelta(days=days_before)
++    deadline_date = last_business_day_on_or_before(calendar_date)
++    adjusted = deadline_date != calendar_date
++    deadline_time = f"{BUSINESS_END:%H:%M}"
++    weekday_kr = _WEEKDAY_KR[deadline_date.weekday()]
++
++    if adjusted:
++        calendar_weekday = _WEEKDAY_KR[calendar_date.weekday()]
++        text = (
++            f"이용일({tour_date.isoformat()}) {days_before}일 전인 "
++            f"{calendar_date.isoformat()}({calendar_weekday})은 영업일이 아니므로, "
++            f"취소 접수 마감은 직전 영업일인 "
++            f"{deadline_date.isoformat()}({weekday_kr}) {deadline_time} KST 입니다."
++        )
++    else:
++        text = (
++            f"이용일({tour_date.isoformat()}) {days_before}일 전인 "
++            f"{deadline_date.isoformat()}({weekday_kr}) {deadline_time} KST 까지 "
++            f"취소 접수가 가능합니다."
++        )
++
++    return {
++        "deadline_date": deadline_date.isoformat(),
++        "deadline_time": deadline_time,
++        "calendar_date": calendar_date.isoformat(),
++        "adjusted": adjusted,
++        "weekday_kr": weekday_kr,
++        "text": text,
++    }
++
++
++@tool(
++    description=(
++        "취소 접수 마감일을 영업일 기준으로 계산합니다. '이용일 N일 전까지 취소 가능' "
++        "규정이 적용되는 상품에서 구체적인 취소 마감 날짜를 안내해야 할 때 호출하세요. "
++        "tour_date 는 'YYYY-MM-DD' 형식의 이용일 문자열, days_before 는 취소 기준일 수(정수)."
++    )
++)
++def calculate_cancellation_deadline(tour_date: str, days_before: int) -> dict[str, Any]:
++    """이용일·취소 기준일 수로 영업일 보정된 취소 마감일을 반환합니다."""
++    try:
++        parsed = datetime.date.fromisoformat(tour_date.strip())
++    except (ValueError, AttributeError):
++        return {
++            "error": "tour_date 는 'YYYY-MM-DD' 형식이어야 합니다.",
++            "tour_date_received": tour_date,
++        }
++    if days_before < 0:
++        return {"error": "days_before 는 0 이상의 정수여야 합니다."}
++
++    result = compute_cancellation_deadline(parsed, days_before)
++    logger.info(
++        "취소 마감일 계산: tour=%s, N=%d → deadline=%s (adjusted=%s)",
++        tour_date,
++        days_before,
++        result["deadline_date"],
++        result["adjusted"],
++    )
++    return result
+diff --git a/agents/naver-smartstore/app/services/email_missing_guidance.py b/agents/naver-smartstore/app/services/email_missing_guidance.py
+index fac64c2..d3ff28c 100644
+--- a/agents/naver-smartstore/app/services/email_missing_guidance.py
++++ b/agents/naver-smartstore/app/services/email_missing_guidance.py
+@@ -22,6 +22,8 @@ from __future__ import annotations
+ 
+ import re
+ 
++from app.business_hours import format_business_hours
++
+ # --- 안내 문구 상수 (SSOT) -------------------------------------------------
+ 
+ EMAIL_MISSING_ALIMTALK_NOTICE = (
+@@ -29,7 +31,8 @@ EMAIL_MISSING_ALIMTALK_NOTICE = (
+ )
+ 
+ EMAIL_CHANGE_COUNSELOR_GUIDANCE = (
+-    "메일 주소 변경이 필요하시면 평일 영업시간(09:30~17:30 KST) 내 상담원 연결을 통해 도움받으실 수 있습니다."
++    f"메일 주소 변경이 필요하시면 {format_business_hours()} 내 "
++    "상담원 연결을 통해 도움받으실 수 있습니다."
+ )
+ 
+ EMAIL_MISSING_REPURCHASE_WARNING = (
+diff --git a/agents/naver-smartstore/app/services/voucher_guidance.py b/agents/naver-smartstore/app/services/voucher_guidance.py
+index a885160..99276fb 100644
+--- a/agents/naver-smartstore/app/services/voucher_guidance.py
++++ b/agents/naver-smartstore/app/services/voucher_guidance.py
+@@ -13,6 +13,8 @@ LLM이 확률적으로 포함하는 택배/송장 부재 설명 문장을 제거
+ 
+ import re
+ 
++from app.business_hours import format_business_hours
++
+ VOUCHER_DELIVERY_PATH = (
+     "바우처 및 안내는 예약 확정 후 카카오 알림톡 또는 예약 시 기재하신 이메일로 발송됩니다."
+ )
+@@ -188,11 +190,12 @@ def ensure_voucher_guidance(response: str | None, order_context: str | None) ->
+ 
+ 
+ def render_prompt_template(text: str) -> str:
+-    """프롬프트 파일의 바우처 관련 플레이스홀더를 Python 상수로 치환."""
++    """프롬프트 파일의 플레이스홀더를 Python 상수로 치환."""
+     return (
+         text
+         .replace("{voucher_delivery_path}", VOUCHER_DELIVERY_PATH)
+         .replace("{voucher_nonreceipt_guidance}", VOUCHER_NONRECEIPT_GUIDANCE)
++        .replace("{business_hours}", format_business_hours())
+     )
+ 
+ 
+diff --git a/agents/naver-smartstore/app/utils.py b/agents/naver-smartstore/app/utils.py
+index eb8b1b3..2466a62 100644
+--- a/agents/naver-smartstore/app/utils.py
++++ b/agents/naver-smartstore/app/utils.py
+@@ -1,10 +1,18 @@
+ import re
+-from datetime import datetime, timezone, timedelta
++from datetime import date, datetime, timezone, timedelta
+ from typing import Any, Optional
+ from urllib.parse import urlparse, parse_qs
+ 
++import holidays
++
++from app.business_hours import BUSINESS_WEEKDAYS, format_business_hours
++
+ KST = timezone(timedelta(hours=9))
+ 
++# 한국 공휴일 집합. holidays 라이브러리가 연도별로 지연 계산하며,
++# 음력 기반 명절(설날·추석)과 대체공휴일도 포함한다.
++_KR_HOLIDAYS = holidays.SouthKorea()
++
+ 
+ def get_current_kst_time() -> datetime:
+     """현재 한국 시간(KST)을 반환합니다."""
+@@ -151,6 +159,18 @@ def extract_product_no_from_outlink(url: Optional[str]) -> Optional[str]:
+     return None
+ 
+ 
++def build_time_context() -> str:
++    """LLM 시스템 프롬프트에 주입할 '현재 KST 시각 + 업무시간' 컨텍스트 블록.
++
++    cancel_refund·product 두 라우터가 동일 형식을 공유하기 위한 단일 출처.
++    """
++    now_kst = get_current_kst_time()
++    return (
++        f"\n[현재 한국 시간: {now_kst.strftime('%Y-%m-%d %H:%M KST')}]"
++        f"\n[업무시간: {format_business_hours()}]"
++    )
++
++
+ def build_inline_product_context(product_info: dict[str, Any], channel_product_no: Optional[str] = None) -> str:
+     """
+     네이버 톡톡 options.product 데이터로 상품 컨텍스트 텍스트를 구성합니다.
+@@ -184,3 +204,32 @@ def build_inline_product_context(product_info: dict[str, Any], channel_product_n
+         parts.append(f"스토어: {store_name}")
+ 
+     return "\n".join(parts)
++
++
++def is_business_day(target: date) -> bool:
++    """주어진 날짜가 한국 영업일(평일이며 공휴일이 아님)인지 판정합니다.
++
++    Args:
++        target: 판정할 날짜.
++
++    Returns:
++        평일(월~금)이고 한국 공휴일이 아니면 True.
++    """
++    if target.weekday() not in BUSINESS_WEEKDAYS:
++        return False
++    return target not in _KR_HOLIDAYS
++
++
++def last_business_day_on_or_before(target: date) -> date:
++    """target 이 영업일이면 그대로, 아니면 직전 영업일까지 거슬러 올라가 반환합니다.
++
++    Args:
++        target: 기준 날짜.
++
++    Returns:
++        target 이하(포함)에서 가장 가까운 영업일.
++    """
++    cursor = target
++    while not is_business_day(cursor):
++        cursor -= timedelta(days=1)
++    return cursor
+diff --git a/agents/naver-smartstore/pyproject.toml b/agents/naver-smartstore/pyproject.toml
+index 778e567..a486f24 100644
+--- a/agents/naver-smartstore/pyproject.toml
++++ b/agents/naver-smartstore/pyproject.toml
+@@ -23,6 +23,7 @@ dependencies = [
+   "pytest-asyncio>=0.23.0",
+   "pytest-mock>=3.12.0",
+   "pytest-cov>=4.1.0",
++  "holidays>=0.97",
+ ]
+ 
+ [tool.pytest.ini_options]
+diff --git a/agents/naver-smartstore/scripts/e2e_cancellation_deadline_webhook.py b/agents/naver-smartstore/scripts/e2e_cancellation_deadline_webhook.py
+new file mode 100644
+index 0000000..ad502a3
+--- /dev/null
++++ b/agents/naver-smartstore/scripts/e2e_cancellation_deadline_webhook.py
+@@ -0,0 +1,104 @@
++"""취소 마감일 영업일 보정 — /webhook E2E 검증.
++
++실제 대화(스마트스토어 상품 13369865657, "26일 예약건은 3일전이면 언제까지
++취소해야하나요")를 /webhook 엔드포인트로 재현한다.
++
++- send_talktalk_message / log_conversation 를 패치해 실제 Naver 발송·Supabase
++  기록 없이 봇 응답만 캡처한다 (실제 고객에게 메시지가 가지 않음).
++- compute_cancellation_deadline 를 spy 로 감싸 LLM 이 마감일 도구를 실제로
++  호출했는지, 어떤 날짜를 산출했는지 확인한다.
++- LLM 비결정성(temperature)을 고려해 N회 반복한다.
++
++OPENAI_API_KEY·COMMERCE_API_URL 이 설정된 .env 가 필요하다.
++실행: agents/naver-smartstore 에서 `uv run python scripts/e2e_cancellation_deadline_webhook.py`
++"""
++import sys
++from unittest.mock import patch
++
++from fastapi.testclient import TestClient
++
++import app.__main__ as main_module
++import app.services.cancellation_deadline as cd_module
++
++PRODUCT_NO = "13369865657"
++REFERER = f"https://smartstore.naver.com/tourvisofficial/products/{PRODUCT_NO}"
++MESSAGE = "26일 예약건은 3일전이면 언제까지 취소해야하나요"
++RUNS = 10
++
++_real_compute = cd_module.compute_cancellation_deadline
++
++
++def main() -> int:
++    sent: list[tuple[str, str]] = []
++    tool_calls: list[dict] = []
++
++    async def fake_send(user, text):
++        sent.append((user, text))
++        return {}
++
++    async def fake_log(*args, **kwargs):
++        return None
++
++    def spy_compute(tour_date, days_before):
++        result = _real_compute(tour_date, days_before)
++        tool_calls.append({
++            "tour_date": tour_date.isoformat(),
++            "days_before": days_before,
++            "deadline_date": result["deadline_date"],
++            "adjusted": result["adjusted"],
++        })
++        return result
++
++    failures = 0
++    with patch.object(main_module, "send_talktalk_message", fake_send), \
++         patch.object(main_module, "log_conversation", fake_log), \
++         patch.object(cd_module, "compute_cancellation_deadline", spy_compute):
++        client = TestClient(main_module.app)
++        for i in range(1, RUNS + 1):
++            sent.clear()
++            tool_calls.clear()
++            payload = {
++                "event": "send",
++                "user": f"e2e-cancel-deadline-{i}",  # 실제 사용자 아님
++                "textContent": {"text": MESSAGE},
++                "options": {"referer": REFERER},
++            }
++            resp = client.post("/webhook", json=payload)
++            bot_replies = [t for (_u, t) in sent]
++            final = bot_replies[-1] if bot_replies else "(응답 없음)"
++
++            print(f"\n{'=' * 64}")
++            print(f"Run {i}/{RUNS}  —  HTTP {resp.status_code}")
++            print(f"User: {MESSAGE}")
++            print(f"메시지 발송 횟수: {len(bot_replies)} (interim 포함)")
++            print(f"도구 호출: {tool_calls if tool_calls else '없음'}")
++            print(f"\nBot 최종 응답:\n{final}")
++
++            called = bool(tool_calls)
++            produced_22 = any(c["deadline_date"] == "2026-05-22" for c in tool_calls)
++            mentions_22 = (
++                "2026-05-22" in final
++                or "05-22" in final
++                or "5월 22" in final
++                or "22일" in final
++            )
++
++            if not called:
++                print("\nFAIL: calculate_cancellation_deadline 도구가 호출되지 않음")
++                failures += 1
++            elif not produced_22:
++                print("\nFAIL: 도구는 호출됐으나 마감일이 2026-05-22 가 아님")
++                failures += 1
++            elif not mentions_22:
++                print("\nFAIL: 도구는 05-22 를 산출했으나 응답 본문에 반영되지 않음")
++                failures += 1
++            else:
++                print("\nPASS: 도구 호출 + 영업일 보정(05-22) 산출 + 응답 반영 확인")
++
++    print(f"\n{'=' * 64}")
++    print(f"Summary: {RUNS - failures}/{RUNS} passed")
++    return 1 if failures else 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/agents/naver-smartstore/tests/test_business_hours.py b/agents/naver-smartstore/tests/test_business_hours.py
+new file mode 100644
+index 0000000..052639e
+--- /dev/null
++++ b/agents/naver-smartstore/tests/test_business_hours.py
+@@ -0,0 +1,19 @@
++import datetime
++
++from app.business_hours import (
++    BUSINESS_END,
++    BUSINESS_START,
++    BUSINESS_WEEKDAYS,
++    format_business_hours,
++)
++
++
++def test_business_hours_constants():
++    assert BUSINESS_START == datetime.time(9, 30)
++    assert BUSINESS_END == datetime.time(17, 30)
++    # weekday(): 월=0 ... 금=4
++    assert BUSINESS_WEEKDAYS == frozenset({0, 1, 2, 3, 4})
++
++
++def test_format_business_hours():
++    assert format_business_hours() == "평일(월~금) 09:30~17:30 KST"
+diff --git a/agents/naver-smartstore/tests/test_cancel_refund_deadline_tool.py b/agents/naver-smartstore/tests/test_cancel_refund_deadline_tool.py
+new file mode 100644
+index 0000000..604e0f1
+--- /dev/null
++++ b/agents/naver-smartstore/tests/test_cancel_refund_deadline_tool.py
+@@ -0,0 +1,38 @@
++from unittest.mock import patch
++
++import pytest
++
++from app.routers import cancel_refund as cancel_refund_module
++
++
++@pytest.mark.asyncio
++async def test_cancel_refund_registers_deadline_tool():
++    """cancel_refund 라우터가 calculate_cancellation_deadline 도구를 에이전트에 등록하고
++    프롬프트에 도구 사용 지시를 포함하는지 검증."""
++    captured: dict[str, object] = {}
++
++    class FakeLLM:
++        def __init__(self, *a, **kw):
++            pass
++
++    def fake_create_react_agent(_llm, tools, prompt):
++        captured["tools"] = tools
++        captured["prompt"] = prompt
++
++        class _Agent:
++            async def ainvoke(self, *_a, **_kw):
++                return {"messages": []}
++
++        return _Agent()
++
++    with patch.object(cancel_refund_module, "ChatOpenAI", FakeLLM), patch.object(
++        cancel_refund_module, "create_react_agent", fake_create_react_agent
++    ), patch.object(cancel_refund_module.settings, "openai_api_key", "sk-test"):
++        await cancel_refund_module.handle_cancel_refund_intent(
++            user_message="26일 예약건은 3일전이면 언제까지 취소하나요",
++            context_id="user-deadline-cr",
++        )
++
++    tool_names = {getattr(t, "name", "") for t in captured["tools"]}
++    assert "calculate_cancellation_deadline" in tool_names
++    assert "calculate_cancellation_deadline" in str(captured["prompt"])
+diff --git a/agents/naver-smartstore/tests/test_cancellation_deadline.py b/agents/naver-smartstore/tests/test_cancellation_deadline.py
+new file mode 100644
+index 0000000..0663801
+--- /dev/null
++++ b/agents/naver-smartstore/tests/test_cancellation_deadline.py
+@@ -0,0 +1,57 @@
++import datetime
++
++from app.services.cancellation_deadline import (
++    calculate_cancellation_deadline,
++    compute_cancellation_deadline,
++)
++
++
++def test_compute_deadline_weekend_adjusted():
++    # 이용일 2026-05-26(화), 3일 전 = 05-23(토) → 직전 영업일 05-22(금)
++    result = compute_cancellation_deadline(datetime.date(2026, 5, 26), 3)
++    assert result["calendar_date"] == "2026-05-23"
++    assert result["deadline_date"] == "2026-05-22"
++    assert result["deadline_time"] == "17:30"
++    assert result["adjusted"] is True
++    assert result["weekday_kr"] == "금"
++    assert "2026-05-22" in result["text"]
++
++
++def test_compute_deadline_no_adjustment():
++    # 이용일 2026-05-29(금), 3일 전 = 05-26(화) → 영업일, 보정 없음
++    result = compute_cancellation_deadline(datetime.date(2026, 5, 29), 3)
++    assert result["deadline_date"] == "2026-05-26"
++    assert result["adjusted"] is False
++    assert result["weekday_kr"] == "화"
++
++
++def test_compute_deadline_holiday_adjusted():
++    # 이용일 2026-01-04, 3일 전 = 2026-01-01(신정 공휴일) → 직전 영업일 2025-12-31(수)
++    # 공휴일 보정 + 연말 경계 역행을 함께 검증한다.
++    result = compute_cancellation_deadline(datetime.date(2026, 1, 4), 3)
++    assert result["calendar_date"] == "2026-01-01"
++    assert result["deadline_date"] == "2025-12-31"
++    assert result["adjusted"] is True
++    assert result["weekday_kr"] == "수"
++
++
++def test_tool_weekend_adjusted():
++    result = calculate_cancellation_deadline.invoke(
++        {"tour_date": "2026-05-26", "days_before": 3}
++    )
++    assert result["deadline_date"] == "2026-05-22"
++    assert result["adjusted"] is True
++
++
++def test_tool_rejects_invalid_date():
++    result = calculate_cancellation_deadline.invoke(
++        {"tour_date": "26일", "days_before": 3}
++    )
++    assert "error" in result
++
++
++def test_tool_rejects_negative_days_before():
++    result = calculate_cancellation_deadline.invoke(
++        {"tour_date": "2026-05-26", "days_before": -1}
++    )
++    assert "error" in result
+diff --git a/agents/naver-smartstore/tests/test_product_deadline_tool.py b/agents/naver-smartstore/tests/test_product_deadline_tool.py
+new file mode 100644
+index 0000000..52349c5
+--- /dev/null
++++ b/agents/naver-smartstore/tests/test_product_deadline_tool.py
+@@ -0,0 +1,42 @@
++from unittest.mock import patch
++
++import pytest
++
++from app.routers import product as product_module
++
++
++@pytest.mark.asyncio
++async def test_product_registers_deadline_tool_and_injects_date():
++    """product 라우터가 calculate_cancellation_deadline 도구를 등록하고,
++    현재 한국 시간을 시스템 프롬프트에 주입하는지 검증."""
++    captured: dict[str, object] = {}
++
++    class FakeLLM:
++        def __init__(self, *a, **kw):
++            pass
++
++    def fake_create_react_agent(_llm, tools, prompt):
++        captured["tools"] = tools
++        captured["prompt"] = prompt
++
++        class _Agent:
++            async def ainvoke(self, *_a, **_kw):
++                return {"messages": []}
++
++        return _Agent()
++
++    with patch.object(product_module, "ChatOpenAI", FakeLLM), patch.object(
++        product_module, "create_react_agent", fake_create_react_agent
++    ), patch.object(product_module.settings, "openai_api_key", "sk-test"):
++        await product_module.handle_product_intent(
++            user_message="26일 예약건은 3일전이면 언제까지 취소하나요",
++            context_id="user-deadline-pr",
++        )
++
++    tool_names = {getattr(t, "name", "") for t in captured["tools"]}
++    assert "calculate_cancellation_deadline" in tool_names
++    assert "get_product_info" in tool_names
++    assert "quote_price" in tool_names
++    prompt = str(captured["prompt"])
++    assert "calculate_cancellation_deadline" in prompt
++    assert "[현재 한국 시간:" in prompt
+diff --git a/agents/naver-smartstore/tests/test_utils.py b/agents/naver-smartstore/tests/test_utils.py
+index dbb92b5..c9027ca 100644
+--- a/agents/naver-smartstore/tests/test_utils.py
++++ b/agents/naver-smartstore/tests/test_utils.py
+@@ -1,4 +1,13 @@
+-from app.utils import extract_channel_product_no, extract_order_id, extract_prd_code, normalize_phone_number
++import datetime
++
++from app.utils import (
++    extract_channel_product_no,
++    extract_order_id,
++    extract_prd_code,
++    is_business_day,
++    last_business_day_on_or_before,
++    normalize_phone_number,
++)
+ 
+ 
+ def test_extract_channel_product_no_valid():
+@@ -69,3 +78,64 @@ def test_extract_order_id_other_domain_returns_none():
+ def test_extract_order_id_none_and_empty():
+     assert extract_order_id(None) is None
+     assert extract_order_id("") is None
++
++
++def test_build_time_context_includes_now_and_business_hours():
++    from app.utils import build_time_context
++
++    ctx = build_time_context()
++    assert "[현재 한국 시간:" in ctx
++    assert "[업무시간: 평일(월~금) 09:30~17:30 KST]" in ctx
++
++
++def test_render_prompt_template_substitutes_business_hours():
++    from app.services.voucher_guidance import render_prompt_template
++
++    assert (
++        render_prompt_template("업무시간은 {business_hours} 입니다.")
++        == "업무시간은 평일(월~금) 09:30~17:30 KST 입니다."
++    )
++
++
++def test_system_base_prompt_has_no_hardcoded_business_hours():
++    """system_base.md 가 업무시간 숫자를 직접 적지 않고 플레이스홀더만 쓰는지 회귀 가드."""
++    from app.routers import cancel_refund as cancel_refund_module
++
++    text = (cancel_refund_module.PROMPTS_DIR / "system_base.md").read_text(encoding="utf-8")
++    assert "09:30" not in text
++    assert "17:30" not in text
++
++
++def test_is_business_day_weekday():
++    # 2026-05-22 는 금요일
++    assert is_business_day(datetime.date(2026, 5, 22)) is True
++
++
++def test_is_business_day_saturday():
++    # 2026-05-23 은 토요일
++    assert is_business_day(datetime.date(2026, 5, 23)) is False
++
++
++def test_is_business_day_sunday():
++    # 2026-05-24 는 일요일
++    assert is_business_day(datetime.date(2026, 5, 24)) is False
++
++
++def test_is_business_day_public_holiday():
++    # 2026-01-01 신정 — 목요일이지만 공휴일
++    assert is_business_day(datetime.date(2026, 1, 1)) is False
++
++
++def test_last_business_day_on_or_before_when_already_business_day():
++    d = datetime.date(2026, 5, 22)  # 금요일
++    assert last_business_day_on_or_before(d) == d
++
++
++def test_last_business_day_on_or_before_from_saturday():
++    # 2026-05-23(토) → 2026-05-22(금)
++    assert last_business_day_on_or_before(datetime.date(2026, 5, 23)) == datetime.date(2026, 5, 22)
++
++
++def test_last_business_day_on_or_before_from_sunday():
++    # 2026-05-24(일) → 2026-05-22(금)
++    assert last_business_day_on_or_before(datetime.date(2026, 5, 24)) == datetime.date(2026, 5, 22)
+diff --git a/agents/naver-smartstore/uv.lock b/agents/naver-smartstore/uv.lock
+index dbf3cf5..3189e95 100644
+--- a/agents/naver-smartstore/uv.lock
++++ b/agents/naver-smartstore/uv.lock
+@@ -1,5 +1,5 @@
+ version = 1
+-revision = 2
++revision = 3
+ requires-python = ">=3.12"
+ resolution-markers = [
+     "python_full_version >= '3.13'",
+@@ -584,6 +584,18 @@ wheels = [
+     { url = "https://files.pythonhosted.org/packages/69/b2/119f6e6dcbd96f9069ce9a2665e0146588dc9f88f29549711853645e736a/h2-4.3.0-py3-none-any.whl", hash = "sha256:c438f029a25f7945c69e0ccf0fb951dc3f73a5f6412981daee861431b70e2bdd", size = 61779, upload-time = "2025-08-23T18:12:17.779Z" },
+ ]
+ 
++[[package]]
++name = "holidays"
++version = "0.97"
++source = { registry = "https://pypi.org/simple" }
++dependencies = [
++    { name = "python-dateutil" },
++]
++sdist = { url = "https://files.pythonhosted.org/packages/0c/61/058f3f05dd318b9d9546df513f8f6611557919e5360cd608a3ce7c7500d4/holidays-0.97.tar.gz", hash = "sha256:8fe491270bd4aeed6f9584d459d5df506a414727ba76fdd9ebd6323def606935", size = 911304, upload-time = "2026-05-18T19:48:19.37Z" }
++wheels = [
++    { url = "https://files.pythonhosted.org/packages/b9/54/7947b0cba0c91b81801da793ea2d273aab5bdd5484a5ba6c2d3863110f07/holidays-0.97-py3-none-any.whl", hash = "sha256:0bcd55e64abddce2f9aa9224d68afe87acdd7eac7c2aef251b0ef7986bb5220b", size = 1479247, upload-time = "2026-05-18T19:48:16.881Z" },
++]
++
+ [[package]]
+ name = "hpack"
+ version = "4.1.0"
+@@ -1109,13 +1121,14 @@ wheels = [
+ 
+ [[package]]
+ name = "naver-smartstore"
+-version = "0.2.1"
++version = "0.3.0"
+ source = { editable = "." }
+ dependencies = [
+     { name = "a2a-sdk" },
+     { name = "click" },
+     { name = "fastapi" },
+     { name = "gunicorn" },
++    { name = "holidays" },
+     { name = "httpx" },
+     { name = "langchain" },
+     { name = "langchain-openai" },
+@@ -1144,6 +1157,7 @@ requires-dist = [
+     { name = "click", specifier = ">=8.1.8" },
+     { name = "fastapi", specifier = ">=0.116.1" },
+     { name = "gunicorn", specifier = ">=22.0.0" },
++    { name = "holidays", specifier = ">=0.97" },
+     { name = "httpx", specifier = ">=0.28.1" },
+     { name = "langchain", specifier = ">=0.3.26" },
+     { name = "langchain-openai", specifier = ">=0.1.0" },
