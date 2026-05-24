@@ -33,10 +33,11 @@ description: Mimiron self-eval 루프의 *판정자(judge)*. Mimiron이 만든 d
     "rationale": "<200자 미만 정리>",
     "samples": [s1, s2, s3],
     "apply_check": 0.0 | 1.0,
+    "certainty_label": "trivial-certain | discriminating-certain | failure-certain | uncertain",
     "ts": "<ISO8601>"
   }
   ```
-  (현 schema는 `score`만 필수. `samples`/`rationale`/`apply_check`/`ts`는 optional — 없으면 4-차원 fallback 으로 해석.)
+  (현 schema는 `score`만 필수. `samples`/`rationale`/`apply_check`/`certainty_label`/`ts`는 optional — 없으면 4-차원 fallback 으로 해석.)
 
 ## 점수 룰브릭 (5 차원, 각 0~1, *동일 가중치 평균*)
 
@@ -93,8 +94,20 @@ python -m py_compile <changed.py files>
 5. **median-of-3** 실행 (같은 룰브릭으로 3회 채점, median을 score로):
    - LLM temperature=0
    - 3 샘플 모두 기록 (audit용)
-6. **Certainty band** check: 3 샘플의 *최대-최소* 가 0.15를 초과하면 *uncertain*로
-   판정 → score는 median을 유지하되 `rationale`에 "uncertain — spread 0.X"를 명시.
+6. **Certainty label** 산출 (4-label, v0.3.0 #23 신설):
+
+   | 조건 | label | 의미 |
+   |---|---|---|
+   | spread ≥ 0.15 | `uncertain` | 모델이 일관된 판단을 못 함. spread 자체가 가장 강한 시그널. |
+   | spread < 0.15 & score ≥ 0.85 | `trivial-certain` | *과제가 쉬워서 합의* (refactor, deterministic). 판별력 시그널 아님. |
+   | spread < 0.15 & 0.35 ≤ score < 0.85 | `discriminating-certain` | *판별력 있는 합의*. candidate 와 expected 가 의미 있게 다르나 일관되게 측정됨. |
+   | spread < 0.15 & score < 0.35 | `failure-certain` | *확실한 실패*. candidate 가 expected 와 의미적으로 거의 무관. |
+
+   `certainty_label` 필드에 위 4 값 중 하나를 기록. rationale 에도 1줄 노출.
+
+   ⚠️ **trivial-certain 해석 주의**: "judge 가 잘 한 것" 으로 읽으면 안 됨 — 과제 자체가 *판별 시그널이 약함* 을 의미. dogfood 분석시 별도로 표시.
+
+   원본 issue #23 의 threshold (0.3/0.4/0.85/0.9) 는 gap 이 있어 (0.3-0.4, 0.85-0.9 무라벨) full coverage 를 위해 0.35/0.85 단일 boundary 로 통합. dogfood/006 §C 참조.
 7. `.mimiron/_outer/judge/<bench_id>.json` 작성 (atomic — 임시 파일에 write 후 rename).
 8. 사용자에게 한 줄 보고:
    ```
@@ -117,9 +130,10 @@ python -m py_compile <changed.py files>
 ```json
 {
   "score": 0.86,
-  "rationale": "J1=1.0(같은 파일), J2=0.8(같은 효과, 이름 다름), J3=0.7(불필요한 import 추가), J4=0.8(criteria 4/5 만족), J5=1.0(apply-check pass). median-of-3 from [0.84, 0.86, 0.88], spread 0.04 (certain).",
+  "rationale": "J1=1.0(같은 파일), J2=0.8(같은 효과, 이름 다름), J3=0.7(불필요한 import 추가), J4=0.8(criteria 4/5 만족), J5=1.0(apply-check pass). median-of-3 from [0.84, 0.86, 0.88], spread 0.04, label=discriminating-certain.",
   "samples": [0.84, 0.86, 0.88],
   "apply_check": 1.0,
+  "certainty_label": "discriminating-certain",
   "ts": "2026-05-23T12:34:56Z"
 }
 ```
