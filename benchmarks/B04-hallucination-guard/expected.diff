@@ -1,0 +1,1359 @@
+diff --git a/agents/naver-smartstore/app/prompts/product.md b/agents/naver-smartstore/app/prompts/product.md
+index dd737ad..045a1de 100644
+--- a/agents/naver-smartstore/app/prompts/product.md
++++ b/agents/naver-smartstore/app/prompts/product.md
+@@ -17,8 +17,12 @@
+ 
+ ## 사용 도구
+ - `get_product_info(channel_product_no or prd_code)`
+-  - 설명: 스마트스토어 상품 상세 정보를 조회합니다.
++  - 설명: 스마트스토어 상품 상세를 **정제된 텍스트** 로 조회합니다. 반환값은 그대로 인용 가능합니다.
+   - 조회 결과가 없으면 유효한 상품 식별자가 없다고 판단합니다.
++- `quote_price(channel_product_no or prd_code, lines)`
++  - 설명: 사용자가 "N명 얼마", "총 결제 금액", "견적" 류로 가격 총액을 물으면 **반드시** 호출해 결정론 계산 결과를 받습니다.
++  - 입력: `lines = [{"option_keywords": ["2026-06-06", "성인"], "count": 3}, ...]`
++  - 반환 문자열에 단가·소계·총액이 한국어로 포맷되어 있으므로 그대로 응답 본문에 인용합니다.
+ 
+ ## 상품 식별 규칙
+ - `channelProductNo`: 운영 규칙상 14자리 숫자 상품번호로 간주합니다. referer URL의 `/products/{번호}`에서도 자동 추출할 수 있습니다.
+@@ -73,6 +77,9 @@
+    - 옵션 조합에 없는 항목을 문의하면 "현재 해당 옵션은 예약/구매가 가능한 상태가 아닙니다"로 안내하고, 정확한 확인은 상품 상세 페이지 또는 상담사를 통해 가능하다고 덧붙입니다.
+ 
+ ## 세부 응답 규칙
++- **가격 총액은 LLM 이 직접 계산하지 않습니다.** 단가·인원·날짜가 식별되는 즉시 `quote_price` 를 호출하고, 반환된 견적 문자열을 그대로 인용합니다.
++- 단가는 [참조 상품 정보] 의 "옵션별 단가" 라인 또는 `quote_price` 결과에만 의존합니다. 외부 추론·반올림·과거 기억에서 단가를 가져오지 않습니다.
++- 옵션 차감금·내부 가격 캐시처럼 보이는 음수 금액 표기가 본문에 등장하지 않도록 합니다(존재하더라도 인용 금지).
+ - 사용자가 구체적 위치, 시설, 역명, 좌석 보장 등을 물어도 도구 결과에 없으면 추론하지 않습니다.
+ - 불명확한 세부사항은 "정확한 확인은 상품 상세 페이지 또는 상담사를 통해 가능하다"고 안내합니다.
+ - 가격이나 혜택은 현재 기준 정보로만 설명하고 확정 표현을 피합니다.
+diff --git a/agents/naver-smartstore/app/routers/product.py b/agents/naver-smartstore/app/routers/product.py
+index 43e98c2..a91c9a3 100644
+--- a/agents/naver-smartstore/app/routers/product.py
++++ b/agents/naver-smartstore/app/routers/product.py
+@@ -24,45 +24,116 @@ def _load_prompt(filename: str) -> str:
+     return render_prompt_template(raw)
+ 
+ 
+-def _load_clients() -> tuple[Any, Any]:
++def _load_commerce_client() -> Any:
++    """LangChain @tool 함수 안에서 commerce_client 를 lazy 로딩한다.
++
++    테스트가 이 함수를 monkeypatch 해 mock client 를 주입할 수 있다.
++    apolloInfo 머지는 Task 4 에서 폐기됐으므로 apollo_client 는 본 라우터에서 더 이상 필요 없다.
++    """
+     commerce_module = importlib.import_module("app.services.commerce_client")
+-    apollo_module = importlib.import_module("app.services.apollo_client")
+-    return getattr(commerce_module, "commerce_client"), getattr(apollo_module, "apollo_client")
++    return getattr(commerce_module, "commerce_client")
+ 
+ 
+-@tool(description="스마트스토어 상품 상세 정보를 조회합니다. 입력은 channelProductNo(숫자) 또는 PRD 코드입니다.")
+-async def get_product_info(channel_product_no_or_prd_code: str) -> dict[str, object]:
+-    commerce_client, apollo_client = _load_clients()
++@tool(
++    description=(
++        "스마트스토어 상품 상세 정보를 조회합니다. "
++        "입력은 channelProductNo(숫자) 또는 PRD 코드. "
++        "반환값은 LLM 응답에 그대로 인용 가능한 정제된 텍스트입니다."
++    )
++)
++async def get_product_info(channel_product_no_or_prd_code: str) -> str:
++    """LLM 이 PRODUCT intent 처리 중 추가 조회가 필요할 때 호출하는 도구.
++
++    Note:
++        본 도구의 반환 텍스트는 `product_context.build_context_text` 의 결과로,
++        pre-fetch 경로(`fetch_product_context`) 와 달리 `detailContent` 이미지의
++        OCR 단계(`[바우처 발송 안내]` 블록 추출) 를 거치지 않는다. 따라서 사용자가
++        도구 경로로만 응답을 받게 되면 바우처 발송 안내가 누락될 수 있다.
++        가격 정확성과는 무관한 별개 결함으로, 후속 작업으로 OCR 공유 리팩터 필요.
++    """
++    from app.services.product_context import build_context_text
++
++    commerce_client = _load_commerce_client()
+     identifier = channel_product_no_or_prd_code.strip()
++    # TODO: PRD/channel 식별자 해상도 로직이 quote_price 와 중복.
++    # 다음 정리 PR 에서 async def _resolve_product(client, identifier) -> dict | None 로 추출.
+ 
++    product: dict[str, Any] | None = None
+     if identifier.startswith("PRD"):
+         search_result = await commerce_client.search_products_by_prd(identifier)
+         contents = search_result.get("contents") if search_result else None
++        if isinstance(contents, list) and contents:
++            first = contents[0]
++            channel_no = (
++                str(first.get("channelProductNo", "")) if isinstance(first, dict) else ""
++            )
++            if channel_no:
++                product = await commerce_client.get_product(channel_no)
++    else:
++        product = await commerce_client.get_product(identifier)
++
++    if not product:
++        return "해당 식별자로 상품을 찾지 못했습니다. 상품 페이지 URL 또는 PRD 코드를 다시 확인해 주세요."
++
++    text = build_context_text(product)
++    if not text:
++        return "상품을 찾았으나 상세 정보 변환에 실패했습니다. 상담사 연결을 안내해 주세요."
++    return text
++
++
++@tool(
++    description=(
++        "스마트스토어 상품의 옵션·인원 조합 총 견적을 결정론적으로 계산합니다. "
++        "사용자가 'N명 얼마', '총 결제 금액', '견적' 등 가격 합계를 물으면 반드시 이 도구를 호출하세요. "
++        "lines 의 option_keywords 는 옵션 이름에 포함되는 부분 문자열 리스트(AND 매칭). "
++        "예: lines=[{\"option_keywords\": [\"2026-06-06\", \"성인\"], \"count\": 3}]."
++    )
++)
++async def quote_price(
++    channel_product_no_or_prd_code: str,
++    lines: list[dict[str, Any]],
++) -> str:
++    """결정론 견적 계산기. LLM 산수 환각 우회 경로."""
++    from app.services.price_quote import QuoteLineRequest, compute_quote
+ 
++    commerce_client = _load_commerce_client()
++    identifier = channel_product_no_or_prd_code.strip()
++    # TODO: PRD/channel 식별자 해상도 로직이 quote_price 와 중복.
++    # 다음 정리 PR 에서 async def _resolve_product(client, identifier) -> dict | None 로 추출.
++
++    product: dict[str, Any] | None = None
++    if identifier.startswith("PRD"):
++        search_result = await commerce_client.search_products_by_prd(identifier)
++        contents = search_result.get("contents") if search_result else None
+         if isinstance(contents, list) and contents:
+             first = contents[0]
+-            channel_no = str(first.get("channelProductNo", "")) if isinstance(first, dict) else ""
++            channel_no = (
++                str(first.get("channelProductNo", "")) if isinstance(first, dict) else ""
++            )
+             if channel_no:
+                 product = await commerce_client.get_product(channel_no)
+-                if product:
+-                    prd_code = product.get("sellerManagementCode")
+-                    if isinstance(prd_code, str) and prd_code:
+-                        apollo_info = await apollo_client.get_product_info(prd_code)
+-                        if apollo_info and isinstance(apollo_info.get("document"), dict):
+-                            product["apolloInfo"] = apollo_info["document"]
+-                    return product
+-        return {}
+-
+-    product = await commerce_client.get_product(identifier)
+-    if product:
+-        prd_code = product.get("sellerManagementCode")
+-        if isinstance(prd_code, str) and prd_code:
+-            apollo_info = await apollo_client.get_product_info(prd_code)
+-            if apollo_info and isinstance(apollo_info.get("document"), dict):
+-                product["apolloInfo"] = apollo_info["document"]
+-        return product
+-
+-    return {}
++    else:
++        product = await commerce_client.get_product(identifier)
++
++    if not product:
++        return "해당 식별자로 상품을 찾지 못했습니다. 상품번호를 다시 확인해 주세요."
++
++    reqs: list[QuoteLineRequest] = []
++    for raw in lines:
++        if not isinstance(raw, dict):
++            continue
++        keywords = raw.get("option_keywords") or []
++        count = raw.get("count")
++        if not isinstance(keywords, list) or isinstance(count, bool) or not isinstance(count, int):
++            return "lines 항목은 {option_keywords: [str], count: int} 형식이어야 합니다."
++        reqs.append(
++            QuoteLineRequest(option_keywords=[str(k) for k in keywords], count=count)
++        )
++
++    if not reqs:
++        return "견적 라인이 비어 있습니다. 인원 구분과 수량을 알려주세요."
++
++    return compute_quote(product, reqs).text
+ 
+ 
+ async def handle_product_intent(
+@@ -110,7 +181,7 @@ async def handle_product_intent(
+ 
+     agent = create_react_agent(
+         llm,
+-        tools=[get_product_info],
++        tools=[get_product_info, quote_price],
+         prompt=system_content,
+     )
+ 
+diff --git a/agents/naver-smartstore/app/services/price_quote.py b/agents/naver-smartstore/app/services/price_quote.py
+new file mode 100644
+index 0000000..1e77e40
+--- /dev/null
++++ b/agents/naver-smartstore/app/services/price_quote.py
+@@ -0,0 +1,129 @@
++"""상품 옵션 견적 결정론 계산.
++
++LLM 산수 환각을 막기 위한 server-side 계산기. 단가는
++`product_context.resolve_option_unit_prices` 의 단일 진실 소스를 사용한다.
++매칭은 모든 keyword 가 옵션 이름 join 안에 포함되어야 하는 AND 매칭.
++"""
++
++from __future__ import annotations
++
++import re
++from dataclasses import dataclass
++from typing import Any
++
++from app.services.product_context import resolve_option_unit_prices
++
++_SLASH_DATE = re.compile(r"\b(\d{1,2})/(\d{1,2})\b")
++
++
++def _normalize(s: str) -> str:
++    """6/6 → 06-06 형태로 약식 날짜 매칭 보강."""
++    s = s.strip().lower()
++    return _SLASH_DATE.sub(lambda m: f"{int(m.group(1)):02d}-{int(m.group(2)):02d}", s)
++
++
++@dataclass(frozen=True)
++class QuoteLineRequest:
++    option_keywords: tuple[str, ...]
++    count: int
++
++    def __post_init__(self) -> None:
++        if not isinstance(self.option_keywords, tuple):
++            object.__setattr__(self, "option_keywords", tuple(self.option_keywords))
++
++
++@dataclass(frozen=True)
++class QuoteResult:
++    ok: bool
++    total: int
++    text: str
++
++
++def _find_combination(
++    combinations: list[dict[str, Any]],
++    keywords: list[str],
++) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
++    norm_keywords = [_normalize(k) for k in keywords if k]
++    if not norm_keywords:
++        return None, list(combinations)
++
++    candidates: list[dict[str, Any]] = []
++    for combo in combinations:
++        joined = _normalize(" ".join(combo["option_names"]))
++        if all(k in joined for k in norm_keywords):
++            candidates.append(combo)
++    if len(candidates) == 1:
++        return candidates[0], candidates
++    return None, candidates
++
++
++def compute_quote(product: dict[str, Any], lines: list[QuoteLineRequest]) -> QuoteResult:
++    resolved = resolve_option_unit_prices(product)
++    combinations = resolved["combinations"]
++    if not combinations:
++        return QuoteResult(
++            ok=False,
++            total=0,
++            text="상품에서 옵션 정보를 찾지 못했습니다. 상품 페이지 옵션 표를 확인해 주세요.",
++        )
++    if not lines:
++        return QuoteResult(
++            ok=False,
++            total=0,
++            text="견적 라인이 비어 있습니다. 인원 구분과 수량을 알려주세요.",
++        )
++
++    detail_lines: list[str] = []
++    total = 0
++
++    for idx, req in enumerate(lines, start=1):
++        if req.count <= 0:
++            return QuoteResult(
++                ok=False,
++                total=0,
++                text=f"{idx}번째 옵션 요청: 수량은 1 이상이어야 합니다 (요청: {req.count}).",
++            )
++
++        match, candidates = _find_combination(combinations, list(req.option_keywords))
++        if match is None:
++            kw_text = " ".join(req.option_keywords) or "(빈 키워드)"
++            if not candidates:
++                available = ", ".join(" / ".join(c["option_names"]) for c in combinations[:10])
++                return QuoteResult(
++                    ok=False,
++                    total=0,
++                    text=(
++                        f"{idx}번째 옵션 요청 '{kw_text}' 에 해당하는 옵션을 찾지 못했습니다. "
++                        f"선택 가능한 옵션: {available}"
++                    ),
++                )
++            candidates_text = ", ".join(" / ".join(c["option_names"]) for c in candidates[:10])
++            return QuoteResult(
++                ok=False,
++                total=0,
++                text=(
++                    f"{idx}번째 옵션 요청 '{kw_text}' 키워드에 여러 옵션이 매칭됩니다. "
++                    f"후보: {candidates_text}. 더 구체적으로 알려주세요."
++                ),
++            )
++
++        if not match["usable"]:
++            return QuoteResult(
++                ok=False,
++                total=0,
++                text=f"{idx}번째 옵션 요청 '{' / '.join(match['option_names'])}' 은(는) 현재 선택불가 상태입니다.",
++            )
++
++        line_total = match["unit_price"] * req.count
++        total += line_total
++        detail_lines.append(
++            f"- {' / '.join(match['option_names'])}: "
++            f"{match['unit_price']:,}원 × {req.count} = {line_total:,}원"
++        )
++
++    body = "\n".join(detail_lines)
++    return QuoteResult(
++        ok=True,
++        total=total,
++        text=f"[견적]\n{body}\n총액: {total:,}원",
++    )
+diff --git a/agents/naver-smartstore/app/services/product_context.py b/agents/naver-smartstore/app/services/product_context.py
+index 7277dbd..1b09225 100644
+--- a/agents/naver-smartstore/app/services/product_context.py
++++ b/agents/naver-smartstore/app/services/product_context.py
+@@ -2,7 +2,7 @@
+ 
+ import re
+ from importlib import import_module
+-from typing import Any
++from typing import Any, TypedDict
+ 
+ from app.logger_config import get_logger
+ from app.services.product_image_ocr import (
+@@ -13,6 +13,83 @@ from app.utils import build_inline_product_context
+ 
+ logger = get_logger(__name__)
+ 
++
++class OptionCombinationPrice(TypedDict):
++    option_names: list[str]
++    unit_price: int
++    usable: bool
++
++
++class ResolvedOptionPrices(TypedDict):
++    sale_price: int | None
++    group_labels: list[str]
++    combinations: list[OptionCombinationPrice]
++
++
++def resolve_option_unit_prices(product: dict[str, Any]) -> ResolvedOptionPrices:
++    """옵션 조합별 최종 단가를 단일 진실 소스로 계산한다.
++
++    네이버 Commerce API 의 `salePrice` 와 `optionCombinations[i].price`(차감/추가금)
++    를 합산해 사용자가 결제할 옵션 단가를 산출한다. 다른 가격 캐시(apolloInfo
++    net_price_currency 등) 는 절대 참조하지 않는다.
++
++    Note:
++        옵션 그룹·이름 인덱스는 1~3 만 지원한다 (`range(1, 4)`). 네이버 Commerce API
++        스키마는 `optionGroupName4` / `optionName4` 까지 정의되어 있으나,
++        본 프로젝트에서 4-dimension 옵션 상품을 운영한 사례가 없어 한계를 의도적으로
++        유지한다. 4-dimension 상품 도입 시 두 루프 모두 `range(1, 5)` 로 확장 필요.
++    """
++    empty: ResolvedOptionPrices = {"sale_price": None, "group_labels": [], "combinations": []}
++    detail = product.get("detail")
++    if not isinstance(detail, dict):
++        return empty
++    origin = detail.get("originProduct")
++    if not isinstance(origin, dict):
++        return empty
++
++    sale_price_raw = origin.get("salePrice")
++    sale_price = int(sale_price_raw) if isinstance(sale_price_raw, (int, float)) else None
++
++    option_info = origin.get("optionInfo")
++    if not isinstance(option_info, dict):
++        return {"sale_price": sale_price, "group_labels": [], "combinations": []}
++
++    group_names_data = option_info.get("optionCombinationGroupNames")
++    group_labels: list[str] = []
++    if isinstance(group_names_data, dict):
++        for i in range(1, 4):
++            gname = group_names_data.get(f"optionGroupName{i}")
++            if isinstance(gname, str) and gname:
++                group_labels.append(gname)
++
++    combinations_raw = option_info.get("optionCombinations")
++    combos: list[OptionCombinationPrice] = []
++    if isinstance(combinations_raw, list):
++        for raw in combinations_raw:
++            if not isinstance(raw, dict):
++                continue
++            names: list[str] = []
++            for i in range(1, 4):
++                v = raw.get(f"optionName{i}")
++                if isinstance(v, str) and v:
++                    names.append(v)
++            adjustment_raw = raw.get("price")
++            adjustment = int(adjustment_raw) if isinstance(adjustment_raw, (int, float)) else 0
++            base = sale_price if sale_price is not None else 0
++            usable_flag = raw.get("usable")
++            stock = raw.get("stockQuantity")
++            usable = (usable_flag is not False) and not (isinstance(stock, int) and stock <= 0)
++            combos.append(
++                {
++                    "option_names": names,
++                    "unit_price": base + adjustment,
++                    "usable": usable,
++                }
++            )
++
++    return {"sale_price": sale_price, "group_labels": group_labels, "combinations": combos}
++
++
+ _IMG_SRC_PATTERN = re.compile(r'<img[^>]+src=[\"\']([^\"\']+)[\"\']', re.IGNORECASE)
+ 
+ 
+@@ -63,7 +140,7 @@ async def fetch_product_context(
+         return inline_context
+ 
+     notice_text = await _extract_email_notice_text_from_product(product)
+-    api_context = _build_context_text(product, email_notice_text=notice_text)
++    api_context = build_context_text(product, email_notice_text=notice_text)
+     if not api_context:
+         return inline_context
+ 
+@@ -90,7 +167,7 @@ async def _extract_email_notice_text_from_product(product: dict[str, object]) ->
+     return None
+ 
+ 
+-def _build_context_text(
++def build_context_text(
+     product: dict[str, object],
+     *,
+     email_notice_text: str | None = None,
+@@ -154,11 +231,9 @@ def _build_context_text(
+             if isinstance(tel, str) and tel:
+                 parts.append(f"[고객센터]: {tel}")
+ 
+-    option_info = origin.get("optionInfo")
+-    if isinstance(option_info, dict):
+-        combinations = option_info.get("optionCombinations")
+-        if isinstance(combinations, list) and combinations:
+-            parts.append(_build_option_text(option_info, combinations))
++    option_block = _build_option_text(product)
++    if option_block:
++        parts.append(option_block)
+ 
+     if email_notice_text:
+         parts.append(f"\n[바우처 발송 안내]\n{email_notice_text}")
+@@ -169,53 +244,69 @@ def _build_context_text(
+     return "\n".join(parts)
+ 
+ 
+-def _build_option_text(
+-    option_info: dict[str, object],
+-    combinations: list[object],
+-) -> str:
+-    lines: list[str] = ["\n[선택 가능한 옵션]"]
++def _build_option_text(product: dict[str, Any]) -> str | None:
++    """[참조 상품 정보] 의 옵션 블록 텍스트를 생성한다.
+ 
+-    group_names_data = option_info.get("optionCombinationGroupNames")
+-    group_labels: list[str] = []
+-    if isinstance(group_names_data, dict):
+-        for i in range(1, 4):
+-            gname = group_names_data.get(f"optionGroupName{i}")
+-            if isinstance(gname, str) and gname:
+-                group_labels.append(gname)
++    단가는 `resolve_option_unit_prices` 의 단일 진실 소스만 사용한다.
++    salePrice 가 없으면 grid 분기를 막아 raw `price`(차감금) 가 노출되는 경로를 차단한다.
++    옵션 자체가 없으면 None 을 반환해 호출자가 블록을 생략하게 한다.
++    """
++    detail = product.get("detail")
++    if not isinstance(detail, dict):
++        return None
++    origin = detail.get("originProduct")
++    if not isinstance(origin, dict):
++        return None
++    option_info = origin.get("optionInfo")
++    if not isinstance(option_info, dict):
++        return None
++    combinations_raw = option_info.get("optionCombinations")
++    if not isinstance(combinations_raw, list) or not combinations_raw:
++        return None
++
++    resolved = resolve_option_unit_prices(product)
++    sale_price = resolved["sale_price"]
++    group_labels = resolved["group_labels"]
++    combos = resolved["combinations"]
++    total_combinations = len(combinations_raw)
+ 
++    lines: list[str] = ["\n[선택 가능한 옵션]"]
+     if group_labels:
+         lines.append(f"옵션 구분: {' / '.join(group_labels)}")
+ 
+-    group_values: dict[int, set[str]] = {1: set(), 2: set(), 3: set()}
+-    unavailable_count = 0
+-
+-    for raw_combo in combinations:
+-        if not isinstance(raw_combo, dict):
+-            continue
+-        combo: dict[str, object] = raw_combo
+-
++    unavailable_count = sum(1 for c in combos if not c["usable"])
++
++    if sale_price is not None and combos:
++        # 단가 grid 분기 — salePrice 확보된 경우만 진입
++        grid_lines: list[str] = []
++        for combo in combos:
++            if not combo["option_names"]:
++                continue
++            suffix = "" if combo["usable"] else " [선택불가]"
++            grid_lines.append(f"- {' / '.join(combo['option_names'])}: {combo['unit_price']:,}원{suffix}")
++        if grid_lines:
++            lines.append("옵션별 단가:")
++            lines.extend(grid_lines[:30])
++            if len(grid_lines) > 30:
++                lines.append(f"... 외 {len(grid_lines) - 30}건 (자세한 단가는 상품 페이지 옵션 표 참조)")
++    else:
++        # Fallback — salePrice 없거나 combos 비어 단가 산출 불가. 이름 목록만 노출.
++        group_values: dict[int, set[str]] = {1: set(), 2: set(), 3: set()}
++        for combo in combos:
++            for idx, name in enumerate(combo["option_names"][:3], start=1):
++                group_values[idx].add(name)
+         for i in range(1, 4):
+-            val = combo.get(f"optionName{i}")
+-            if isinstance(val, str) and val:
+-                group_values[i].add(val)
+-
+-        usable = combo.get("usable")
+-        stock = combo.get("stockQuantity")
+-        if usable is False or (isinstance(stock, int) and stock <= 0):
+-            unavailable_count += 1
+-
+-    for i in range(1, 4):
+-        if not group_values[i]:
+-            continue
+-        label = group_labels[i - 1] if i - 1 < len(group_labels) else f"옵션{i}"
+-        sorted_values = sorted(group_values[i])
+-        if len(sorted_values) <= 10:
+-            lines.append(f"{label}: {', '.join(sorted_values)}")
+-        else:
+-            shown = sorted_values[:10]
+-            lines.append(f"{label}: {', '.join(shown)} 외 {len(sorted_values) - 10}개")
+-
+-    lines.append(f"총 옵션 조합: {len(combinations)}개")
++            if not group_values[i]:
++                continue
++            label = group_labels[i - 1] if i - 1 < len(group_labels) else f"옵션{i}"
++            sorted_values = sorted(group_values[i])
++            if len(sorted_values) <= 10:
++                lines.append(f"{label}: {', '.join(sorted_values)}")
++            else:
++                shown = sorted_values[:10]
++                lines.append(f"{label}: {', '.join(shown)} 외 {len(sorted_values) - 10}개")
++
++    lines.append(f"총 옵션 조합: {total_combinations}개")
+     if unavailable_count > 0:
+         lines.append(f"선택불가 옵션: {unavailable_count}개")
+ 
+diff --git a/agents/naver-smartstore/tests/fixtures/beppu_safari_13376502159.json b/agents/naver-smartstore/tests/fixtures/beppu_safari_13376502159.json
+new file mode 100644
+index 0000000..3da4b2f
+--- /dev/null
++++ b/agents/naver-smartstore/tests/fixtures/beppu_safari_13376502159.json
+@@ -0,0 +1,33 @@
++{
++  "channelProductNo": "13376502159",
++  "sellerManagementCode": "PRD9999999999",
++  "detail": {
++    "originProduct": {
++      "name": "[벳푸 아프리칸 사파리, 가마도지옥 입장료포함] 후쿠오카 유후인 벳부 일일 소소버스투어",
++      "salePrice": 96530,
++      "statusType": "SALE",
++      "optionInfo": {
++        "optionCombinationGroupNames": {
++          "optionGroupName1": "출발일",
++          "optionGroupName2": "인원 구분"
++        },
++        "optionCombinations": [
++          { "optionName1": "2026-06-06", "optionName2": "성인 (만 16세 이상)", "price": 0, "usable": true, "stockQuantity": 10 },
++          { "optionName1": "2026-06-06", "optionName2": "아동 (49개월 이상 ~ 만 16세 미만)", "price": -4100, "usable": true, "stockQuantity": 10 },
++          { "optionName1": "2026-06-06", "optionName2": "소인 (25개월 이상 ~ 48개월 이하)", "price": -4100, "usable": true, "stockQuantity": 10 },
++          { "optionName1": "2026-06-06", "optionName2": "유아 (13개월 이상 ~ 24개월 이하)", "price": -65720, "usable": true, "stockQuantity": 10 }
++        ]
++      },
++      "detailAttribute": {
++        "afterServiceInfo": { "afterServiceTelephoneNumber": "02-0000-0000" }
++      }
++    }
++  },
++  "apolloInfo": {
++    "labels": [
++      { "id": "LAB3008628466", "name": "성인", "net_price_currency": 94000.0 },
++      { "id": "LAB3008628467", "name": "아동", "net_price_currency": 90000.0 },
++      { "id": "LAB3014943497", "name": "유아", "net_price_currency": 30000.0 }
++    ]
++  }
++}
+diff --git a/agents/naver-smartstore/tests/test_price_quote.py b/agents/naver-smartstore/tests/test_price_quote.py
+new file mode 100644
+index 0000000..4d07097
+--- /dev/null
++++ b/agents/naver-smartstore/tests/test_price_quote.py
+@@ -0,0 +1,119 @@
++"""compute_quote() 단위 테스트 — 견적은 순수 결정론 계산."""
++
++from __future__ import annotations
++
++import pytest
++
++from app.services.price_quote import QuoteLineRequest, compute_quote
++
++
++@pytest.fixture
++def beppu_product() -> dict:
++    """벳푸 사파리 #13376502159 의 핵심 필드만 추린 미니 fixture."""
++    return {
++        "channelProductNo": "13376502159",
++        "detail": {
++            "originProduct": {
++                "name": "[벳푸 아프리칸 사파리] 후쿠오카 유후인 벳부 일일 소소버스투어",
++                "salePrice": 96530,
++                "optionInfo": {
++                    "optionCombinationGroupNames": {
++                        "optionGroupName1": "출발일",
++                        "optionGroupName2": "인원 구분",
++                    },
++                    "optionCombinations": [
++                        {"optionName1": "2026-06-06", "optionName2": "성인 (만 16세 이상)", "price": 0, "usable": True, "stockQuantity": 10},
++                        {"optionName1": "2026-06-06", "optionName2": "아동 (49개월 이상 ~ 만 16세 미만)", "price": -4100, "usable": True, "stockQuantity": 10},
++                        {"optionName1": "2026-06-06", "optionName2": "소인 (25개월 이상 ~ 48개월 이하)", "price": -4100, "usable": True, "stockQuantity": 10},
++                        {"optionName1": "2026-06-06", "optionName2": "유아 (13개월 이상 ~ 24개월 이하)", "price": -65720, "usable": True, "stockQuantity": 10},
++                    ],
++                },
++            }
++        },
++    }
++
++
++def test_reproduces_incident_total(beppu_product: dict) -> None:
++    """2026-05-19 사건 재현: 6/6 성인3·아동1·유아3 = 474,450원."""
++    lines = [
++        QuoteLineRequest(option_keywords=["2026-06-06", "성인"], count=3),
++        QuoteLineRequest(option_keywords=["2026-06-06", "아동"], count=1),
++        QuoteLineRequest(option_keywords=["2026-06-06", "유아"], count=3),
++    ]
++    result = compute_quote(beppu_product, lines)
++
++    assert result.ok is True
++    assert result.total == 474450
++    assert "289,590원" in result.text
++    assert "92,430원" in result.text
++    assert "30,810원" in result.text
++    assert "474,450원" in result.text
++
++
++def test_partial_keyword_match_resolves_unique_option(beppu_product: dict) -> None:
++    lines = [QuoteLineRequest(option_keywords=["6/6", "성인"], count=2)]
++    result = compute_quote(beppu_product, lines)
++    assert result.ok is True
++    assert result.total == 96530 * 2
++
++
++def test_ambiguous_keyword_returns_error_with_candidates(beppu_product: dict) -> None:
++    """인원 구분 keyword 없이 날짜만 주면 매칭 다수 — 후보 안내."""
++    lines = [QuoteLineRequest(option_keywords=["2026-06-06"], count=1)]
++    result = compute_quote(beppu_product, lines)
++    assert result.ok is False
++    assert "여러" in result.text or "후보" in result.text
++
++
++def test_no_match_returns_error(beppu_product: dict) -> None:
++    lines = [QuoteLineRequest(option_keywords=["2026-12-31", "성인"], count=1)]
++    result = compute_quote(beppu_product, lines)
++    assert result.ok is False
++    assert "선택 가능한 옵션" in result.text
++
++
++def test_unavailable_option_blocks_quote(beppu_product: dict) -> None:
++    import copy
++    product = copy.deepcopy(beppu_product)
++    product["detail"]["originProduct"]["optionInfo"]["optionCombinations"][0]["usable"] = False
++    lines = [QuoteLineRequest(option_keywords=["2026-06-06", "성인 (만"], count=1)]
++    result = compute_quote(product, lines)
++    assert result.ok is False
++    assert "선택불가" in result.text
++
++
++def test_zero_count_is_rejected(beppu_product: dict) -> None:
++    lines = [QuoteLineRequest(option_keywords=["2026-06-06", "성인"], count=0)]
++    result = compute_quote(beppu_product, lines)
++    assert result.ok is False
++
++
++def test_empty_lines_returns_error(beppu_product: dict) -> None:
++    """빈 lines 는 silent ok=True 가 아닌 명시적 에러로 반환."""
++    result = compute_quote(beppu_product, [])
++    assert result.ok is False
++    assert result.total == 0
++    assert "총액: 0원" not in result.text
++    assert "비어" in result.text or "라인" in result.text
++
++
++def test_quote_line_request_is_truly_frozen() -> None:
++    """option_keywords 가 tuple 로 변환되어 mutation 불가능."""
++    req = QuoteLineRequest(option_keywords=["a", "b"], count=1)
++    assert isinstance(req.option_keywords, tuple)
++    assert req.option_keywords == ("a", "b")
++    # frozen=True 가 reference 잠그고 tuple 변환이 내용도 잠금
++    with pytest.raises((AttributeError, Exception)):
++        req.count = 2  # type: ignore[misc]
++
++
++def test_quote_line_request_keyword_listing_in_error_includes_index(beppu_product: dict) -> None:
++    """에러 메시지에 line index 가 포함되어 LLM 이 어느 요청이 실패했는지 안내 가능."""
++    lines = [
++        QuoteLineRequest(option_keywords=["2026-06-06", "성인"], count=1),
++        QuoteLineRequest(option_keywords=["2026-06-06", "외계인"], count=1),  # no-match
++    ]
++    result = compute_quote(beppu_product, lines)
++    assert result.ok is False
++    assert "2번째" in result.text
++    assert "외계인" in result.text
+diff --git a/agents/naver-smartstore/tests/test_product_context.py b/agents/naver-smartstore/tests/test_product_context.py
+index b8ec4d8..07d3b51 100644
+--- a/agents/naver-smartstore/tests/test_product_context.py
++++ b/agents/naver-smartstore/tests/test_product_context.py
+@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
+ import pytest
+ 
+ from app.agent import smartstore_graph
+-from app.services.product_context import _build_context_text, fetch_product_context, strip_html
++from app.services.product_context import build_context_text, fetch_product_context, strip_html
+ 
+ 
+ class TestStripHtml:
+@@ -30,10 +30,10 @@ class TestStripHtml:
+ 
+ class TestBuildContextText:
+     def test_returns_none_when_no_detail(self) -> None:
+-        assert _build_context_text({}) is None
++        assert build_context_text({}) is None
+ 
+     def test_returns_none_when_no_origin_product(self) -> None:
+-        assert _build_context_text({"detail": {}}) is None
++        assert build_context_text({"detail": {}}) is None
+ 
+     def test_extracts_name_and_price(self) -> None:
+         product = {
+@@ -46,7 +46,7 @@ class TestBuildContextText:
+                 }
+             },
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
+         assert result is not None
+         assert "간사이 패스 7일권" in result
+         assert "89,000원" in result
+@@ -62,7 +62,7 @@ class TestBuildContextText:
+                 }
+             }
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
+         assert result is not None
+         assert "취소/환불 안내" in result
+         assert "미사용 시 취소 가능" in result
+@@ -81,7 +81,7 @@ class TestBuildContextText:
+                 }
+             }
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
+         assert result is not None
+         assert "환불 가능 (미사용 시)" in result
+ 
+@@ -98,7 +98,7 @@ class TestBuildContextText:
+                 }
+             }
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
+         assert result is not None
+         assert "환불정책" not in result
+ 
+@@ -115,11 +115,113 @@ class TestBuildContextText:
+                 }
+             }
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
+         assert result is not None
+         assert "02-3448-6101" in result
+ 
+ 
++class TestResolveOptionUnitPrices:
++    def test_resolves_sale_price_plus_adjustment(self) -> None:
++        from app.services.product_context import resolve_option_unit_prices
++
++        product = {
++            "detail": {
++                "originProduct": {
++                    "salePrice": 96530,
++                    "optionInfo": {
++                        "optionCombinationGroupNames": {
++                            "optionGroupName1": "출발일",
++                            "optionGroupName2": "인원 구분",
++                        },
++                        "optionCombinations": [
++                            {
++                                "optionName1": "2026-06-06",
++                                "optionName2": "성인 (만 16세 이상)",
++                                "price": 0,
++                                "usable": True,
++                                "stockQuantity": 10,
++                            },
++                            {
++                                "optionName1": "2026-06-06",
++                                "optionName2": "아동 (49개월 이상 ~ 만 16세 미만)",
++                                "price": -4100,
++                                "usable": True,
++                                "stockQuantity": 10,
++                            },
++                            {
++                                "optionName1": "2026-06-06",
++                                "optionName2": "유아 (13개월 이상 ~ 24개월 이하)",
++                                "price": -65720,
++                                "usable": True,
++                                "stockQuantity": 10,
++                            },
++                        ],
++                    },
++                }
++            }
++        }
++
++        result = resolve_option_unit_prices(product)
++
++        assert result["sale_price"] == 96530
++        assert result["group_labels"] == ["출발일", "인원 구분"]
++        assert result["combinations"] == [
++            {
++                "option_names": ["2026-06-06", "성인 (만 16세 이상)"],
++                "unit_price": 96530,
++                "usable": True,
++            },
++            {
++                "option_names": ["2026-06-06", "아동 (49개월 이상 ~ 만 16세 미만)"],
++                "unit_price": 92430,
++                "usable": True,
++            },
++            {
++                "option_names": ["2026-06-06", "유아 (13개월 이상 ~ 24개월 이하)"],
++                "unit_price": 30810,
++                "usable": True,
++            },
++        ]
++
++    def test_returns_empty_for_missing_origin(self) -> None:
++        from app.services.product_context import resolve_option_unit_prices
++        assert resolve_option_unit_prices({}) == {"sale_price": None, "group_labels": [], "combinations": []}
++
++    def test_returns_empty_when_origin_product_missing(self) -> None:
++        from app.services.product_context import resolve_option_unit_prices
++        product = {"detail": {}}  # detail 은 dict 지만 originProduct 없음
++        assert resolve_option_unit_prices(product) == {
++            "sale_price": None,
++            "group_labels": [],
++            "combinations": [],
++        }
++
++    def test_marks_unusable_combinations(self) -> None:
++        from app.services.product_context import resolve_option_unit_prices
++        product = {
++            "detail": {
++                "originProduct": {
++                    "salePrice": 10000,
++                    "optionInfo": {
++                        "optionCombinations": [
++                            # 가드 A: usable=False, 재고는 있음 → usable 플래그 단독 검증
++                            {"optionName1": "A", "price": 0, "usable": False, "stockQuantity": 5},
++                            # 가드 B: usable=True, 재고 0 → 재고 가드 단독 검증
++                            {"optionName1": "B", "price": 0, "usable": True, "stockQuantity": 0},
++                            # 정상 항목 — 단가 산식 검증
++                            {"optionName1": "C", "price": 500, "usable": True, "stockQuantity": 3},
++                        ],
++                    },
++                }
++            }
++        }
++        result = resolve_option_unit_prices(product)
++        assert result["combinations"][0]["usable"] is False, "usable=False 가드 실패"
++        assert result["combinations"][1]["usable"] is False, "stockQuantity<=0 가드 실패"
++        assert result["combinations"][2]["usable"] is True
++        assert result["combinations"][2]["unit_price"] == 10500
++
++
+ class TestBuildOptionText:
+     def test_extracts_option_groups_and_values(self) -> None:
+         product = {
+@@ -151,12 +253,13 @@ class TestBuildOptionText:
+                 }
+             }
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
+         assert result is not None
+         assert "선택 가능한 옵션" in result
+         assert "차량 종류" in result
+         assert "택시 1-4인승" in result
+         assert "총 옵션 조합: 2개" in result
++        assert "0원" not in result
+ 
+     def test_missing_option_not_in_context(self) -> None:
+         product = {
+@@ -174,7 +277,7 @@ class TestBuildOptionText:
+                 }
+             }
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
+         assert result is not None
+         assert "택시 1-4인승" in result
+         assert "밴" not in result
+@@ -193,9 +296,10 @@ class TestBuildOptionText:
+                 }
+             }
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
+         assert result is not None
+         assert "선택불가 옵션: 1개" in result
++        assert "0원" not in result
+ 
+     def test_skips_empty_option_combinations(self) -> None:
+         product = {
+@@ -209,7 +313,7 @@ class TestBuildOptionText:
+                 }
+             }
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
+         assert result is not None
+         assert "선택 가능한 옵션" not in result
+ 
+@@ -222,7 +326,7 @@ class TestBuildOptionText:
+                 }
+             }
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
+         assert result is not None
+         assert "선택 가능한 옵션" not in result
+ 
+@@ -235,6 +339,7 @@ class TestBuildOptionText:
+             "detail": {
+                 "originProduct": {
+                     "name": "테스트",
++                    "salePrice": 50000,
+                     "optionInfo": {
+                         "optionCombinationGroupNames": {"optionGroupName1": "날짜"},
+                         "optionCombinations": combos,
+@@ -242,9 +347,135 @@ class TestBuildOptionText:
+                 }
+             }
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
++        assert result is not None
++        # salePrice 가 있으므로 grid 분기로 들어가 각 조합 단가 노출
++        assert "50,000원" in result
++        assert "날짜-00" in result
++        assert "날짜-14" in result
++
++    def test_option_grid_shows_resolved_unit_prices(self) -> None:
++        product = {
++            "detail": {
++                "originProduct": {
++                    "name": "벳푸 사파리",
++                    "salePrice": 96530,
++                    "optionInfo": {
++                        "optionCombinationGroupNames": {
++                            "optionGroupName1": "출발일",
++                            "optionGroupName2": "인원 구분",
++                        },
++                        "optionCombinations": [
++                            {
++                                "optionName1": "2026-06-06",
++                                "optionName2": "성인 (만 16세 이상)",
++                                "price": 0,
++                                "usable": True,
++                                "stockQuantity": 10,
++                            },
++                            {
++                                "optionName1": "2026-06-06",
++                                "optionName2": "아동 (49개월 이상 ~ 만 16세 미만)",
++                                "price": -4100,
++                                "usable": True,
++                                "stockQuantity": 10,
++                            },
++                            {
++                                "optionName1": "2026-06-06",
++                                "optionName2": "유아 (13개월 이상 ~ 24개월 이하)",
++                                "price": -65720,
++                                "usable": True,
++                                "stockQuantity": 10,
++                            },
++                        ],
++                    },
++                }
++            }
++        }
++        result = build_context_text(product)
++        assert result is not None
++        assert "96,530원" in result
++        assert "92,430원" in result
++        assert "30,810원" in result
++        for forbidden in ("-4,100", "-65,720", "-4100", "-65720"):
++            assert forbidden not in result, f"raw 차감금 노출: {forbidden}"
++
++    def test_option_grid_marks_unavailable(self) -> None:
++        product = {
++            "detail": {
++                "originProduct": {
++                    "name": "테스트",
++                    "salePrice": 10000,
++                    "optionInfo": {
++                        "optionCombinations": [
++                            {"optionName1": "A", "price": 0, "usable": True, "stockQuantity": 5},
++                            {"optionName1": "B", "price": 0, "usable": False, "stockQuantity": 0},
++                        ],
++                    },
++                }
++            }
++        }
++        result = build_context_text(product)
++        assert result is not None
++        assert "[선택불가]" in result
++
++    def test_no_sale_price_does_not_leak_raw_price_adjustments(self) -> None:
++        """salePrice 가 응답에서 누락된 경우, raw `price` 차감금 음수가 출력에 새어 나오지 않아야 한다.
++
++        Task 2 코드 리뷰 회귀: 이전 구현은 sale_price=None 일 때 unit_price = 0 + (-4100)
++        을 그대로 출력해 raw 차감금이 본문에 노출됐다.
++        """
++        product = {
++            "detail": {
++                "originProduct": {
++                    "name": "salePrice 누락 상품",
++                    # salePrice 의도적으로 미포함
++                    "optionInfo": {
++                        "optionCombinationGroupNames": {
++                            "optionGroupName1": "인원 구분",
++                        },
++                        "optionCombinations": [
++                            {"optionName1": "성인", "price": 0, "usable": True, "stockQuantity": 5},
++                            {"optionName1": "아동", "price": -4100, "usable": True, "stockQuantity": 5},
++                            {"optionName1": "유아", "price": -65720, "usable": True, "stockQuantity": 5},
++                        ],
++                    },
++                }
++            }
++        }
++        result = build_context_text(product)
++        assert result is not None
++        # 옵션 이름은 fallback 로 노출
++        assert "성인" in result
++        assert "아동" in result
++        assert "유아" in result
++        # 단가는 grid 분기가 안 열려 절대 노출 금지
++        for forbidden in (
++            "-4,100", "-4100", "-65,720", "-65720",  # raw 음수 차감금
++            "0원",                                   # 0 원 표기도 금지 (오해 소지)
++            "옵션별 단가",                            # grid 분기 자체 미진입
++        ):
++            assert forbidden not in result, f"단가 노출 경로 누설: {forbidden}"
++
++    def test_no_sale_price_zero_price_still_no_grid(self) -> None:
++        """salePrice 없고 price 도 모두 0 인 케이스도 grid 분기 미진입 (의미 없는 0원 출력 방지)."""
++        product = {
++            "detail": {
++                "originProduct": {
++                    "name": "테스트",
++                    "optionInfo": {
++                        "optionCombinations": [
++                            {"optionName1": "A", "usable": True, "stockQuantity": 5},
++                            {"optionName1": "B", "usable": True, "stockQuantity": 5},
++                        ],
++                    },
++                }
++            }
++        }
++        result = build_context_text(product)
+         assert result is not None
+-        assert "외 5개" in result
++        assert "0원" not in result, "0원 표기는 LLM 에 잘못된 시그널"
++        assert "옵션별 단가" not in result
+ 
+ 
+ class TestFetchProductContext:
+@@ -372,7 +603,7 @@ class TestProductNamePriority:
+                 },
+             },
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
+         assert result is not None
+         first_line = result.splitlines()[0]
+         assert first_line == "상품명: [즉시확정] 인천공항 마티나라운지 이용권 1터미널 2터미널 스카이허브라운지"
+@@ -387,7 +618,7 @@ class TestProductNamePriority:
+                 },
+             },
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
+         assert result is not None
+         first_line = result.splitlines()[0]
+         assert first_line == "상품명: [오타루 3시간] 북해도 샤코탄&오타루(시마무이,카무이미사키) 1일 버스투어 (라쿠투어)"
+@@ -400,6 +631,6 @@ class TestProductNamePriority:
+                 "originProduct": {"name": "정규명"},
+             },
+         }
+-        result = _build_context_text(product)
++        result = build_context_text(product)
+         assert result is not None
+         assert result.splitlines()[0] == "상품명: 정규명"
+diff --git a/agents/naver-smartstore/tests/test_product_intent_regression_beppu.py b/agents/naver-smartstore/tests/test_product_intent_regression_beppu.py
+new file mode 100644
+index 0000000..f30fd33
+--- /dev/null
++++ b/agents/naver-smartstore/tests/test_product_intent_regression_beppu.py
+@@ -0,0 +1,74 @@
++"""2026-05-19 벳푸 사파리 사건 회귀 — LLM 이 quote_price 를 호출했을 때 정확한 총액이
++나오는지, 그리고 get_product_info 가 오염 데이터를 절대 노출하지 않는지 잠근다.
++"""
++
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from unittest.mock import AsyncMock
++
++import pytest
++
++
++FIXTURE = Path(__file__).parent / "fixtures" / "beppu_safari_13376502159.json"
++
++
++@pytest.mark.asyncio
++async def test_quote_price_with_real_fixture_yields_474450(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    from app.routers import product as product_router
++
++    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
++    commerce_mock = AsyncMock()
++    commerce_mock.get_product.return_value = payload
++    monkeypatch.setattr(product_router, "_load_commerce_client", lambda: commerce_mock)
++
++    text = await product_router.quote_price.ainvoke(
++        {
++            "channel_product_no_or_prd_code": "13376502159",
++            "lines": [
++                {"option_keywords": ["6/6", "성인"], "count": 3},
++                {"option_keywords": ["6/6", "아동"], "count": 1},
++                {"option_keywords": ["6/6", "유아"], "count": 3},
++            ],
++        }
++    )
++
++    assert "474,450원" in text
++    assert "289,590원" in text
++    assert "92,430원" in text
++    assert "30,810원" in text
++    for forbidden in ("428,000", "462,000", "94,000", "90,000원", "30,000원"):
++        assert forbidden not in text, f"금지 수치 노출: {forbidden}"
++
++
++@pytest.mark.asyncio
++async def test_get_product_info_text_has_no_pollution(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    from app.routers import product as product_router
++
++    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
++    commerce_mock = AsyncMock()
++    commerce_mock.get_product.return_value = payload
++    monkeypatch.setattr(product_router, "_load_commerce_client", lambda: commerce_mock)
++
++    text = await product_router.get_product_info.ainvoke(
++        {"channel_product_no_or_prd_code": "13376502159"}
++    )
++
++    assert "96,530원" in text
++    assert "92,430원" in text
++    assert "30,810원" in text
++
++    for forbidden in (
++        "apolloInfo", "net_price_currency",
++        "94,000", "94000.0",
++        "90,000", "90000.0",
++        "30,000원", "30000.0",
++        "-4,100", "-4100",
++        "-65,720", "-65720",
++    ):
++        assert forbidden not in text, f"오염 노출: {forbidden}"
+diff --git a/agents/naver-smartstore/tests/test_product_router_tool_payload.py b/agents/naver-smartstore/tests/test_product_router_tool_payload.py
+new file mode 100644
+index 0000000..fe3ec6f
+--- /dev/null
++++ b/agents/naver-smartstore/tests/test_product_router_tool_payload.py
+@@ -0,0 +1,146 @@
++"""get_product_info LangChain 도구의 반환값 정합성 회귀 테스트.
++
++2026-05-19 벳푸 사파리 사건 회귀: raw apolloInfo·optionCombinations.price 음수·
++net_price_currency 가 LLM 컨텍스트로 새어 나가지 않도록 잠근다.
++"""
++
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++from unittest.mock import AsyncMock
++
++import pytest
++
++
++FIXTURE = Path(__file__).parent / "fixtures" / "beppu_safari_13376502159.json"
++
++
++@pytest.fixture
++def beppu_payload() -> dict[str, Any]:
++    return json.loads(FIXTURE.read_text(encoding="utf-8"))
++
++
++@pytest.mark.asyncio
++async def test_get_product_info_returns_curated_text_only(
++    monkeypatch: pytest.MonkeyPatch, beppu_payload: dict[str, Any]
++) -> None:
++    from app.routers import product as product_router
++
++    commerce_mock = AsyncMock()
++    commerce_mock.get_product.return_value = beppu_payload
++    monkeypatch.setattr(product_router, "_load_commerce_client", lambda: commerce_mock)
++
++    result = await product_router.get_product_info.ainvoke(
++        {"channel_product_no_or_prd_code": "13376502159"}
++    )
++
++    # 1) 반환 타입은 str (이전: dict)
++    assert isinstance(result, str), f"기대: str, 실제: {type(result).__name__}"
++
++    # 2) 정확한 단가 노출
++    assert "96,530원" in result
++    assert "92,430원" in result
++    assert "30,810원" in result
++
++    # 3) 오염 데이터 누출 차단
++    for forbidden in (
++        "apolloInfo", "net_price_currency",
++        "94,000", "90,000", "30,000", "30,000원",
++        "-4,100", "-4100",
++        "-65,720", "-65720",
++    ):
++        assert forbidden not in result, f"오염 노출: {forbidden}"
++
++    # 4) apollo_client 가 본 라우터에서 import 되지 않음을 모듈 레벨로 검증
++    import app.routers.product as _product_module
++    assert not hasattr(_product_module, "apollo_client"), "apollo_client 가 router 모듈에 남아 있음"
++
++
++@pytest.mark.asyncio
++async def test_get_product_info_returns_empty_message_when_not_found(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    from app.routers import product as product_router
++
++    commerce_mock = AsyncMock()
++    commerce_mock.get_product.return_value = None
++    monkeypatch.setattr(product_router, "_load_commerce_client", lambda: commerce_mock)
++
++    result = await product_router.get_product_info.ainvoke(
++        {"channel_product_no_or_prd_code": "99999999999999"}
++    )
++
++    assert isinstance(result, str)
++    assert "찾지 못" in result or "조회되지" in result or "확인할 수 없" in result
++
++
++@pytest.mark.asyncio
++async def test_quote_price_returns_deterministic_total(
++    monkeypatch: pytest.MonkeyPatch, beppu_payload: dict[str, Any]
++) -> None:
++    from app.routers import product as product_router
++
++    commerce_mock = AsyncMock()
++    commerce_mock.get_product.return_value = beppu_payload
++    monkeypatch.setattr(product_router, "_load_commerce_client", lambda: commerce_mock)
++
++    result = await product_router.quote_price.ainvoke(
++        {
++            "channel_product_no_or_prd_code": "13376502159",
++            "lines": [
++                {"option_keywords": ["2026-06-06", "성인"], "count": 3},
++                {"option_keywords": ["2026-06-06", "아동"], "count": 1},
++                {"option_keywords": ["2026-06-06", "유아"], "count": 3},
++            ],
++        }
++    )
++
++    assert isinstance(result, str)
++    assert "474,450원" in result
++    assert "289,590원" in result
++    for forbidden in ("428,000", "462,000", "94,000", "90,000", "30,000"):
++        assert forbidden not in result, f"오답 수치 노출: {forbidden}"
++
++
++@pytest.mark.asyncio
++async def test_quote_price_handles_unknown_product(monkeypatch: pytest.MonkeyPatch) -> None:
++    from app.routers import product as product_router
++
++    commerce_mock = AsyncMock()
++    commerce_mock.get_product.return_value = None
++    monkeypatch.setattr(product_router, "_load_commerce_client", lambda: commerce_mock)
++
++    result = await product_router.quote_price.ainvoke(
++        {
++            "channel_product_no_or_prd_code": "13376502159",
++            "lines": [{"option_keywords": ["성인"], "count": 1}],
++        }
++    )
++    assert isinstance(result, str)
++    assert "찾지 못" in result or "확인" in result
++
++
++@pytest.mark.asyncio
++async def test_quote_price_rejects_bool_count(
++    monkeypatch: pytest.MonkeyPatch, beppu_payload: dict[str, Any]
++) -> None:
++    """count: True/False 같은 bool 입력은 명시적 에러로 거부 (Python bool ⊂ int 함정)."""
++    from app.routers import product as product_router
++
++    commerce_mock = AsyncMock()
++    commerce_mock.get_product.return_value = beppu_payload
++    monkeypatch.setattr(product_router, "_load_commerce_client", lambda: commerce_mock)
++
++    result = await product_router.quote_price.ainvoke(
++        {
++            "channel_product_no_or_prd_code": "13376502159",
++            "lines": [{"option_keywords": ["2026-06-06", "성인"], "count": True}],
++        }
++    )
++    assert isinstance(result, str)
++    assert "형식" in result, f"bool count 가 정상 통과: {result}"
++    # bool count 가 True=1 로 잘못 처리되면 단가가 나올 수 있음 — 절대 금지
++    assert "96,530원" not in result
++    assert "289,590원" not in result

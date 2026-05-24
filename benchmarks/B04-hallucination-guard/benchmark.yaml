@@ -1,0 +1,20 @@
+id: B04-hallucination-guard
+repo: ../../.bench-clones/workspace
+base_ref: 7585e0a3a629468aeb5b9525a609453bf7c750fc
+target_ref: 4267e138c28976ef22fdbc557b1220d7bef97850
+issue_text_file: issue.md
+expected_diff_file: expected.diff
+test_command: 'python3 -c "import os, sys; root=''agents/naver-smartstore''; ok = os.path.exists(f''{root}/app/services/price_quote.py'') and ''def compute_quote'' in open(f''{root}/app/services/price_quote.py'').read() and ''def resolve_option_unit_prices'' in open(f''{root}/app/services/product_context.py'').read() and ''quote_price'' in open(f''{root}/app/routers/product.py'').read(); sys.exit(0 if ok else 1)"'
+difficulty: hard
+notes: |
+  원본 PR: ts-cxdm/workspace#2046 — fix(smartstore): 가격 견적 환각 근본 차단
+  base→target 사이 변경: 9개 파일 (prod 4 + test fixtures/tests 5), +2286 / -95
+  주요 변경:
+    - 신규 services/price_quote.py: compute_quote 결정론 계산기 + frozen dataclass
+    - services/product_context.py: resolve_option_unit_prices 단일 진실 소스 헬퍼
+    - routers/product.py: apolloInfo 머지 제거, raw JSON → 정제 텍스트, quote_price 도구 등록
+    - prompts/product.md: quote_price 의무 사용 + 단가 출처 규칙
+  test_command 전략: 4개 fix signal (신규 파일 + 신규 함수 2개 + 도구 등록)이 모두
+  AND 매칭되어야 pass. 풀 pytest 회피, 가벼운 file-content assertion.
+  expected.diff 는 agents/ pathspec 으로 제한 — 동일 PR 의 docs/superpowers/plans/ 1290줄
+  planning artifact 는 *judge 공정성 위해 제외* (Mimiron 이 재현할 산출물 아님).
