@@ -25,6 +25,7 @@ class Benchmark:
     difficulty: str
     notes: str
     yaml_dir: Path  # benchmark.yaml의 디렉토리 (relative 경로 해석용)
+    swebench_meta: str | None = None  # _swebench.json 같은 보조 메타 파일명 (옵셔널)
 
     @classmethod
     def load(cls, path: Path) -> "Benchmark":
@@ -47,6 +48,7 @@ class Benchmark:
             difficulty=raw.get("difficulty", "unknown"),
             notes=raw.get("notes", ""),
             yaml_dir=path.parent,
+            swebench_meta=raw.get("swebench_meta"),
         )
 
     def issue_text(self) -> str:

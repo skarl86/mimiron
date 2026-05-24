@@ -92,12 +92,25 @@ def cmd_init(args: argparse.Namespace) -> int:
             )
             return EXIT_USAGE_ERROR
         _bootstrap_global(cwd, args.bootstrap_toolchain)
+    clar_src = getattr(args, "clarification_from", None)
+    clar_text: str | None = None
+    if clar_src:
+        clar_path = Path(clar_src)
+        if not clar_path.is_absolute():
+            clar_path = (cwd / clar_path).resolve()
+        if not clar_path.exists():
+            print(f"error: --clarification-from file not found: {clar_src}", file=sys.stderr)
+            return EXIT_USAGE_ERROR
+        clar_text = clar_path.read_text(encoding="utf-8")
     sidecar.mkdir(parents=True)
     state = State.create(
         slug=args.slug,
         persistent=not args.no_persist,
         user_language=args.language,
     )
+    if clar_text is not None:
+        (sidecar / "clarification.md").write_text(clar_text, encoding="utf-8")
+        state.phase = "spec"
     state.save(sidecar / "state.json")
     print(f"initialized {args.slug} at {sidecar}")
     return EXIT_OK
@@ -648,6 +661,13 @@ def build_parser() -> argparse.ArgumentParser:
             "Human language Mimiron uses when speaking to the user during this slug "
             "(e.g. 'Korean', 'English'). Omit for auto-detect each session."
         ),
+    )
+    p_init.add_argument(
+        "--clarification-from",
+        dest="clarification_from",
+        default=None,
+        help="외부 clarification.md 직주입 → clarify phase skip, phase=spec 로 점프 "
+             "(SWE-bench 어댑터 / regression fixture 용).",
     )
     p_init.set_defaults(func=cmd_init)
 
