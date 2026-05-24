@@ -144,3 +144,42 @@ def test_load_from_jsonl_raises_on_missing_required_field(tmp_path):
     bad.write_text('{"instance_id": "x"}\n', encoding="utf-8")
     with pytest.raises(IE):
         load_from_jsonl(bad)
+
+
+def test_load_from_jsonl_deserializes_json_string_selector_fields(tmp_path):
+    """Regression: HF SWE-bench Lite stores FAIL_TO_PASS/PASS_TO_PASS as JSON strings.
+    Without normalization write_fixture iterates the str into chars."""
+    import json as _j
+    from mimiron.bench.swebench_import import load_from_jsonl
+
+    src = tmp_path / "hf_like.jsonl"
+    rec = {
+        "instance_id": "x__x-1", "repo": "x/x", "base_commit": "c",
+        "problem_statement": "p", "patch": "d",
+        "FAIL_TO_PASS": '["tests/a.py::test_x", "tests/a.py::test_y[param-1]"]',
+        "PASS_TO_PASS": '["tests/a.py::test_z"]',
+        "version": "1.0",
+    }
+    src.write_text(_j.dumps(rec) + "\n", encoding="utf-8")
+    insts = load_from_jsonl(src)
+    assert insts[0]["FAIL_TO_PASS"] == ["tests/a.py::test_x", "tests/a.py::test_y[param-1]"]
+    assert insts[0]["PASS_TO_PASS"] == ["tests/a.py::test_z"]
+
+
+def test_load_from_jsonl_preserves_list_selector_fields(tmp_path):
+    """Backward-compat: if fields are already lists, normalize must be a no-op."""
+    import json as _j
+    from mimiron.bench.swebench_import import load_from_jsonl
+
+    src = tmp_path / "already_list.jsonl"
+    rec = {
+        "instance_id": "x__x-1", "repo": "x/x", "base_commit": "c",
+        "problem_statement": "p", "patch": "d",
+        "FAIL_TO_PASS": ["t::a", "t::b"],
+        "PASS_TO_PASS": ["t::c"],
+        "version": "1.0",
+    }
+    src.write_text(_j.dumps(rec) + "\n", encoding="utf-8")
+    insts = load_from_jsonl(src)
+    assert insts[0]["FAIL_TO_PASS"] == ["t::a", "t::b"]
+    assert insts[0]["PASS_TO_PASS"] == ["t::c"]

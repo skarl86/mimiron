@@ -172,6 +172,21 @@ def write_fixture(
 
 
 _REQUIRED = ("instance_id", "repo", "base_commit", "problem_statement", "patch")
+# HF SWE-bench Lite stores these as JSON-encoded strings, not lists.
+# Found during dogfood: write_fixture would str-iterate them into chars otherwise.
+_JSON_LIST_FIELDS = ("FAIL_TO_PASS", "PASS_TO_PASS")
+
+
+def _normalize_json_list_fields(rec: dict[str, Any]) -> dict[str, Any]:
+    """FAIL_TO_PASS/PASS_TO_PASS 가 JSON string 이면 list 로 deserialize."""
+    for key in _JSON_LIST_FIELDS:
+        v = rec.get(key)
+        if isinstance(v, str):
+            try:
+                rec[key] = _json.loads(v)
+            except _json.JSONDecodeError as e:
+                raise ImportError(f"{rec.get('instance_id', '?')}: {key} not valid JSON: {e}") from e
+    return rec
 
 
 def load_from_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -188,7 +203,7 @@ def load_from_jsonl(path: Path) -> list[dict[str, Any]]:
         missing = [k for k in _REQUIRED if k not in rec]
         if missing:
             raise ImportError(f"line {n}: missing required fields {missing}")
-        out.append(rec)
+        out.append(_normalize_json_list_fields(rec))
     return out
 
 
@@ -202,4 +217,4 @@ def load_from_huggingface(subset: str = "test") -> list[dict[str, Any]]:
             "Install: `uv pip install -e '.[swebench]'` or use --from-jsonl <path>"
         ) from e
     ds = load_dataset("princeton-nlp/SWE-bench_Lite", split=subset)
-    return [dict(x) for x in ds]
+    return [_normalize_json_list_fields(dict(x)) for x in ds]
