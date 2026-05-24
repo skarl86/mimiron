@@ -1,6 +1,10 @@
 """bench scoring 공식."""
 from mimiron.bench.scorer import (
-    compute_bench_score, parse_pytest_output, parse_generic_test_output
+    DEFAULT_SIM_GATE,
+    compute_bench_score,
+    decide_verdict,
+    parse_pytest_output,
+    parse_generic_test_output,
 )
 
 
@@ -41,3 +45,50 @@ def test_parse_generic_pass_when_returncode_zero() -> None:
 def test_parse_generic_fail_when_returncode_nonzero() -> None:
     rate = parse_generic_test_output(stdout="", stderr="err", returncode=1)
     assert rate == 0.0
+
+
+# v0.3.0 #20 — decide_verdict + sim_gate
+
+
+def test_decide_verdict_passes_when_above_cutoff_and_sim_above_gate() -> None:
+    v = decide_verdict(
+        bench_score=0.80, semantic_similarity=0.7, cutoff=0.75, sim_gate=0.5
+    )
+    assert v == "passed"
+
+
+def test_decide_verdict_fails_when_below_cutoff() -> None:
+    v = decide_verdict(
+        bench_score=0.50, semantic_similarity=0.7, cutoff=0.75, sim_gate=0.5
+    )
+    assert v == "failed"
+
+
+def test_decide_verdict_sim_gate_forces_failed_even_when_score_passes() -> None:
+    # B02 NameError regression scenario — test_pass dominates score but sim is low
+    v = decide_verdict(
+        bench_score=0.76, semantic_similarity=0.32, cutoff=0.75, sim_gate=0.5
+    )
+    assert v == "failed"
+
+
+def test_decide_verdict_sim_gate_disabled_when_zero() -> None:
+    v = decide_verdict(
+        bench_score=0.76, semantic_similarity=0.0, cutoff=0.75, sim_gate=0.0
+    )
+    assert v == "passed"
+
+
+def test_decide_verdict_default_sim_gate_is_half() -> None:
+    assert DEFAULT_SIM_GATE == 0.5
+    # confirm default is applied when sim_gate omitted
+    v = decide_verdict(bench_score=0.80, semantic_similarity=0.49, cutoff=0.75)
+    assert v == "failed"
+
+
+def test_decide_verdict_boundary_at_sim_gate_passes() -> None:
+    # exactly at sim_gate is allowed through (>=, not >)
+    v = decide_verdict(
+        bench_score=0.80, semantic_similarity=0.5, cutoff=0.75, sim_gate=0.5
+    )
+    assert v == "passed"

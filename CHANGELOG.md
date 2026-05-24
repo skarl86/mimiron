@@ -66,6 +66,7 @@ Plus `unstuck` as the personified safety mechanism — human-in-the-loop recover
 - bench-judge: J5 (apply-check) dimension — `git apply --check` against base_ref as deterministic 5th rubric, optional `apply_check` JSON field, backward-compat fallback to 4-dim mean (#21)
 - bench-judge: 4-label certainty band (`trivial-certain` / `discriminating-certain` / `failure-certain` / `uncertain`) replacing the old binary certain/uncertain. Optional `certainty_label` JSON field. Full coverage via 0.35 / 0.85 thresholds (#23)
 - bench-judge: deterministic prompt-variation across median-of-3 rounds (`v030-r1-canonical` / `v030-r2-shuffle-actual-first` / `v030-r3-regression-strict`). Optional `variation_seeds` JSON metadata. Empirical result on dogfood/005 candidates: null aggregate-spread effect, but r3 strict-emphasis produces directional pull on regression-risky candidates (B01, B02) — hypothesis partially rejected per spec (#22)
+- bench: `bench_score` formula — `test_pass_rate` now measured on *candidate-applied* worktree (option 1), and `decide_verdict()` adds `sim < 0.5` force-fail gate (option 3). Existing weight formula unchanged. Per-bench input path resolution: `.mimiron/_bench/_input/<id>.diff` (preferred), with backward-compat fallbacks. New `details.test_measurement_mode` + `details.candidate_apply_status` fields. dogfood/005 B02 catastrophic candidate now fails via two redundant mechanisms (#20)
 
 ## [v0.2.0] — 2026-05-24 — **Bench foundation**
 
