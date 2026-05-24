@@ -61,3 +61,65 @@ def test_stratify_is_deterministic_with_same_seed():
     a = stratify_instances(insts, target=4, seed=7, max_per_repo=4)
     b = stratify_instances(insts, target=4, seed=7, max_per_repo=4)
     assert [x["instance_id"] for x in a] == [x["instance_id"] for x in b]
+
+
+def test_write_fixture_creates_yaml_issue_diff_meta(tmp_path):
+    from mimiron.bench.swebench_import import write_fixture
+
+    inst = {
+        "instance_id": "django__django-11099",
+        "repo": "django/django",
+        "base_commit": "419a78300f7c",
+        "problem_statement": "Allow non-ASCII username validation",
+        "patch": "diff --git a/django/x.py b/django/x.py\n+pass\n",
+        "FAIL_TO_PASS": ["tests/auth_tests.py::test_unicode"],
+        "PASS_TO_PASS": ["tests/auth_tests.py::test_ascii"],
+        "version": "3.0",
+        "_mimiron_difficulty": "medium",
+    }
+    fixture_dir = tmp_path / "benchmarks"
+    written = write_fixture(inst, root=fixture_dir, clone_root="../../.bench-clones/swebench")
+    assert written.name == "SWE-LITE-django__django-11099"
+    assert (written / "benchmark.yaml").exists()
+    assert (written / "issue.md").read_text() == "Allow non-ASCII username validation"
+    assert (written / "expected.diff").read_text() == inst["patch"]
+    import json as _j
+    meta = _j.loads((written / "_swebench.json").read_text())
+    assert meta["FAIL_TO_PASS"] == ["tests/auth_tests.py::test_unicode"]
+    assert meta["instance_id"] == "django__django-11099"
+
+
+def test_write_fixture_benchmark_yaml_has_swebench_meta_field(tmp_path):
+    from mimiron.bench.swebench_import import write_fixture
+    from mimiron import yaml_compat as yaml
+
+    inst = {
+        "instance_id": "x__x-1", "repo": "x/x", "base_commit": "deadbeef",
+        "problem_statement": "p", "patch": "d",
+        "FAIL_TO_PASS": ["a::b"], "PASS_TO_PASS": [],
+        "version": "1.0", "_mimiron_difficulty": "easy",
+    }
+    written = write_fixture(inst, root=tmp_path, clone_root="../../.clones")
+    y = yaml.safe_load((written / "benchmark.yaml").read_text())
+    assert y["swebench_meta"] == "_swebench.json"
+    assert y["target_ref"] is None
+    assert "pytest" in y["test_command"]
+    assert "a::b" in y["test_command"]
+
+
+def test_write_fixture_handles_hyphenated_org_name(tmp_path):
+    """Regression: sphinx-doc__sphinx-9000 must produce 'sphinx-doc__sphinx' repo dir."""
+    from mimiron.bench.swebench_import import write_fixture
+    from mimiron import yaml_compat as yaml
+
+    inst = {
+        "instance_id": "sphinx-doc__sphinx-9000",
+        "repo": "sphinx-doc/sphinx", "base_commit": "abc",
+        "problem_statement": "p", "patch": "d",
+        "FAIL_TO_PASS": ["t::a"], "PASS_TO_PASS": [],
+        "version": "1.0", "_mimiron_difficulty": "easy",
+    }
+    written = write_fixture(inst, root=tmp_path, clone_root="../../.clones")
+    assert written.name == "SWE-LITE-sphinx-doc__sphinx-9000"
+    y = yaml.safe_load((written / "benchmark.yaml").read_text())
+    assert y["repo"] == "../../.clones/sphinx-doc__sphinx"

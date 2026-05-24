@@ -1,9 +1,13 @@
 """SWE-bench Lite → mimiron fixture importer."""
 from __future__ import annotations
 
+import json as _json
 import random
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from mimiron import yaml_compat as yaml
 
 
 @dataclass(frozen=True)
@@ -103,3 +107,61 @@ def stratify_instances(
             per_repo[repo] = per_repo.get(repo, 0) + 1
 
     return selected[:target]
+
+
+def write_fixture(
+    instance: dict[str, Any],
+    *,
+    root: Path,
+    clone_root: str,
+) -> Path:
+    """SWE-bench instance → benchmarks/SWE-LITE-<id>/ 디렉토리 생성.
+
+    root: benchmarks/ 디렉토리의 부모 (보통 cwd) — 안에 benchmarks/SWE-LITE-XX/ 작성
+    clone_root: benchmark.yaml 의 repo 필드가 가리킬 상대 경로 (importer 가 미리 clone)
+    """
+    iid = instance["instance_id"]
+    fixture_id = f"SWE-LITE-{iid}"
+    fixture_dir = root / fixture_id
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+
+    repo_dir_name = iid.split("__")[0] + "__" + iid.rsplit("-", 1)[0].split("__", 1)[1]
+    repo_path = f"{clone_root}/{repo_dir_name}"
+
+    ftp = instance.get("FAIL_TO_PASS", []) or []
+    ptp = instance.get("PASS_TO_PASS", []) or []
+    selectors = " ".join(ftp + ptp)
+
+    bench_yaml = {
+        "id": fixture_id,
+        "repo": repo_path,
+        "base_ref": instance["base_commit"],
+        "target_ref": None,
+        "issue_text_file": "issue.md",
+        "expected_diff_file": "expected.diff",
+        "test_command": f"pytest {selectors} -q",
+        "difficulty": instance.get("_mimiron_difficulty", "unknown"),
+        "swebench_meta": "_swebench.json",
+        "notes": (
+            f"Imported from princeton-nlp/SWE-bench_Lite\n"
+            f"Original instance_id: {iid}\n"
+        ),
+    }
+    (fixture_dir / "benchmark.yaml").write_text(
+        yaml.safe_dump(bench_yaml, sort_keys=False), encoding="utf-8"
+    )
+    (fixture_dir / "issue.md").write_text(instance["problem_statement"], encoding="utf-8")
+    (fixture_dir / "expected.diff").write_text(instance["patch"], encoding="utf-8")
+
+    meta = {
+        "instance_id": iid,
+        "FAIL_TO_PASS": ftp,
+        "PASS_TO_PASS": ptp,
+        "version": instance.get("version", "unknown"),
+        "environment_setup_commit": instance.get("environment_setup_commit"),
+    }
+    (fixture_dir / "_swebench.json").write_text(
+        _json.dumps(meta, indent=2), encoding="utf-8"
+    )
+
+    return fixture_dir
