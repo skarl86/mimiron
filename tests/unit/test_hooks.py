@@ -6,6 +6,7 @@ hooks는 stdin/stdout JSON으로 외부 invocation을 받지만, 로직은 *함�
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import sys
 from datetime import datetime, timedelta, timezone
@@ -300,3 +301,182 @@ def test_project_root_falls_back_to_cwd_when_env_missing(
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     assert session_start._project_root() == tmp_path
+
+
+# ─────── post-toolwrite hard-reject (T02 / drift-hook-hard-reject) ───────
+
+
+def _seed_execute_slug_with_unlock(
+    md: Path, slug: str, owned_files: list[str], *, spec_unlocked: bool
+) -> None:
+    """T02 헬퍼: state.spec_unlocked 플래그까지 명시적으로 직렬화한 슬러그 시드."""
+    s = md / slug
+    s.mkdir(parents=True, exist_ok=True)
+    (s / "state.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "slug": slug,
+                "phase": "execute",
+                "spec_unlocked": spec_unlocked,
+            }
+        )
+    )
+    (s / "plan.yaml").write_text(
+        "schema_version: 1\nslug: {slug}\nspec_hash: x\ntasks:\n".format(slug=slug)
+        + "".join(
+            f"  - id: T0{i}\n    title: t\n    owned_files: [{f!r}]\n    "
+            f"expected_artifacts: [{f!r}]\n"
+            for i, f in enumerate(owned_files, start=1)
+        )
+    )
+
+
+def _run_main_with_event(
+    post_toolwrite, monkeypatch: pytest.MonkeyPatch, event: dict
+) -> int:
+    """stdin 을 JSON event 로 채우고 main() 호출."""
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(event)))
+    return post_toolwrite.main()
+
+
+def test_post_toolwrite_main_emits_deny_on_drift(
+    tmp_path: Path,
+    post_toolwrite,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC01: drift + sidecar 아님 + spec_unlocked=False → permissionDecision=deny."""
+    md = tmp_path / ".mimiron"
+    _seed_execute_slug_with_unlock(md, "demo", ["some_owned.py"], spec_unlocked=False)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    event = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(tmp_path / "another.py")},
+    }
+    rc = _run_main_with_event(post_toolwrite, monkeypatch, event)
+    assert rc == 0
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # drift.log 가 한 줄 이상 적재돼야 (감사 추적은 reject 와 무관)
+    drift_log = md / "demo" / "drift.log"
+    assert drift_log.exists()
+    assert "file=another.py" in drift_log.read_text(encoding="utf-8")
+
+
+def test_post_toolwrite_main_skips_deny_when_spec_unlocked(
+    tmp_path: Path,
+    post_toolwrite,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC02: state.spec_unlocked=True 슬러그는 deny 건너뛰고 additionalContext warn 만."""
+    md = tmp_path / ".mimiron"
+    _seed_execute_slug_with_unlock(md, "demo", ["some_owned.py"], spec_unlocked=True)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    event = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(tmp_path / "another.py")},
+    }
+    rc = _run_main_with_event(post_toolwrite, monkeypatch, event)
+    assert rc == 0
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    hook_out = out["hookSpecificOutput"]
+    assert "permissionDecision" not in hook_out
+    assert "additionalContext" in hook_out
+    # 감사 추적: drift.log 는 무조건 적재
+    drift_log = md / "demo" / "drift.log"
+    assert drift_log.exists()
+    assert "file=another.py" in drift_log.read_text(encoding="utf-8")
+
+
+def test_post_toolwrite_main_skips_deny_for_mimiron_sidecar_paths(
+    tmp_path: Path,
+    post_toolwrite,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC03: .mimiron/ 하위 sidecar 편집은 spec_unlocked=False 여도 deny 우회."""
+    md = tmp_path / ".mimiron"
+    _seed_execute_slug_with_unlock(md, "demo", ["some_owned.py"], spec_unlocked=False)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    sidecar = tmp_path / ".mimiron" / "demo" / "evaluation" / "semantic.md"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    event = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(sidecar)},
+    }
+    rc = _run_main_with_event(post_toolwrite, monkeypatch, event)
+    assert rc == 0
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    hook_out = out["hookSpecificOutput"]
+    assert "permissionDecision" not in hook_out
+    assert "additionalContext" in hook_out
+    drift_log = md / "demo" / "drift.log"
+    assert drift_log.exists()
+    assert ".mimiron/demo/evaluation/semantic.md" in drift_log.read_text(encoding="utf-8")
+
+
+def test_post_toolwrite_main_emits_deny_for_real_source_drift(
+    tmp_path: Path,
+    post_toolwrite,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC04: deny 응답 reason 에 'Mimiron drift reject' 리터럴, 슬러그명, rel path 포함."""
+    md = tmp_path / ".mimiron"
+    _seed_execute_slug_with_unlock(md, "demo", ["some_owned.py"], spec_unlocked=False)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    event = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(tmp_path / "another.py")},
+    }
+    rc = _run_main_with_event(post_toolwrite, monkeypatch, event)
+    assert rc == 0
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    hook_out = out["hookSpecificOutput"]
+    assert hook_out["permissionDecision"] == "deny"
+    reason = hook_out["permissionDecisionReason"]
+    assert "Mimiron drift reject" in reason
+    assert "demo" in reason
+    assert "another.py" in reason
+
+
+def test_post_toolwrite_drift_log_appended_even_when_whitelisted(
+    tmp_path: Path,
+    post_toolwrite,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC05: sidecar 편집(whitelist) 도 drift.log 는 반드시 한 줄 이상 적재."""
+    md = tmp_path / ".mimiron"
+    _seed_execute_slug_with_unlock(md, "demo", ["some_owned.py"], spec_unlocked=False)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    sidecar = tmp_path / ".mimiron" / "demo" / "foo.md"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    event = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(sidecar)},
+    }
+    rc = _run_main_with_event(post_toolwrite, monkeypatch, event)
+    assert rc == 0
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    # reject 우회 확인
+    assert "permissionDecision" not in out["hookSpecificOutput"]
+    # drift.log 적재 확인
+    drift_log = md / "demo" / "drift.log"
+    assert drift_log.exists()
+    log_text = drift_log.read_text(encoding="utf-8")
+    assert ".mimiron/demo/foo.md" in log_text
+    # 최소 한 줄 이상
+    assert len([ln for ln in log_text.splitlines() if ln.strip()]) >= 1

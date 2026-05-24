@@ -43,8 +43,17 @@ def _load_thresholds(mimiron_dir: Path) -> tuple[int, int]:
     if not path.exists():
         return WALL_CLOCK_DEFAULT_S, TOKEN_BUDGET_DEFAULT
     try:
-        import yaml
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        # Make mimiron.yaml_compat importable from the plugin tree.
+        # Hooks are launched as standalone Python processes, not as part of
+        # the mimiron package — so we extend sys.path before the lazy import.
+        plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(
+            Path(__file__).resolve().parent.parent
+        )
+        src_path = f"{plugin_root}/src"
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        from mimiron.yaml_compat import safe_load
+        raw = safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception:
         return WALL_CLOCK_DEFAULT_S, TOKEN_BUDGET_DEFAULT
     return (

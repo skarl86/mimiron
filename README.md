@@ -7,7 +7,7 @@
 [![tests](https://img.shields.io/badge/tests-197%20passing-22a86b?style=flat-square)](#testing)
 [![python](https://img.shields.io/badge/python-3.11+-7a3ff5?style=flat-square)](https://www.python.org)
 [![license](https://img.shields.io/badge/license-MIT-d6a542?style=flat-square)](./LICENSE)
-[![status](https://img.shields.io/badge/status-v0.1.0%20·%20form%20complete-c490ff?style=flat-square)](./CHANGELOG.md)
+[![status](https://img.shields.io/badge/status-v0.2.0%20·%20plugin%20self--contained-c490ff?style=flat-square)](./CHANGELOG.md)
 [![claude code](https://img.shields.io/badge/claude%20code-plugin-ffd966?style=flat-square)](https://claude.com/claude-code)
 
 **A multi-agent harness for Claude Code with quantitative gates, DAG-based parallel execution, and persistent loop — guarded by 14 safety pins.**
@@ -47,19 +47,20 @@ Then in your project, kick off a feature:
 
 The full 6-phase pipeline triggers: Socratic clarification → frozen spec → DAG of tasks → parallel worker dispatch → deterministic gate evaluation → finalize with a commit suggestion. `state.json` is the ledger your hooks (and you) can interrupt at any phase.
 
-### One more step — install the CLI (currently required, v0.1.0)
+### Current limitations
 
-> ⚠️ Today the skills above call `mimiron init`, `mimiron gate`, `mimiron commit-task` etc. as Bash commands. **They expect the `mimiron` CLI on `$PATH`** — plugin install alone does *not* put it there. Fix is tracked in [#15](https://github.com/skarl86/mimiron/issues/15); for now run once:
+v0.2.0 부터 plugin install 만으로 충분 — Python 3.11+ 만 시스템에 있으면 됩니다. 별도 CLI 설치(`pip install -e .`, `uvx ...`) 없이 `scripts/mimiron` 이 plugin 디렉토리 안에서 stdlib + 번들 소스만으로 동작합니다 ([#15](https://github.com/skarl86/mimiron/issues/15)). 외부 `mimiron` wrapper 가 `$PATH` 에 이미 있으면 그쪽이 우선될 수 있으니 `which mimiron` 으로 확인하세요.
 
-```bash
-git clone https://github.com/skarl86/mimiron /tmp/mimiron && cd /tmp/mimiron
-uv pip install -e .         # or: pip install -e .
+### Bootstrap a fresh project
+
+```
+/mimiron "..."
 ```
 
-Bootstrap a fresh project's mechanical toolchain in one shot:
+위 한 줄로 충분하지만, plugin 의 CLI 를 직접 호출하고 싶다면 (예: bootstrap 만 별도로 돌리고 싶을 때):
 
 ```bash
-mimiron init my-feature --bootstrap-toolchain=python-uv   # or python-pip | node-npm | go
+"$CLAUDE_PLUGIN_ROOT/scripts/mimiron" init my-feature --bootstrap-toolchain=python-uv
 ```
 
 This writes `.mimiron/_global/{mechanical.toml,thresholds.yaml}` from the `evals/` templates so `gate mechanical` works out of the box.
@@ -175,7 +176,7 @@ mimiron/
 
 ## Status
 
-**v0.1.0 — form complete.** Every spec § 4.1 component exists, every phase transition is automated, two dogfood runs (one defect-finding, one verification) closed the feedback loop with **zero remaining workarounds**.
+**v0.2.0 — plugin self-contained.** Every spec § 4.1 component exists, every phase transition is automated, dogfood runs closed the feedback loop with **zero remaining workarounds**, and the plugin no longer requires a separate CLI install on `$PATH` ([#15](https://github.com/skarl86/mimiron/issues/15)).
 
 | Area | State |
 |---|---|

@@ -5,7 +5,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, TypedDict
-import yaml
+
+from mimiron import yaml_compat as yaml
 
 
 class BenchmarkError(ValueError):

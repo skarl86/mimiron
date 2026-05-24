@@ -1,2 +1,4 @@
 #!/usr/bin/env bash
-exec python3 -m mimiron.cli "$@"
+# Self-contained mimiron CLI wrapper.
+# See scripts/_launcher.py for PYTHONPATH isolation rationale.
+exec python3 "$(dirname "$0")/_launcher.py" mimiron "$@"

@@ -1,12 +1,16 @@
 """plan.yaml — DAG of tasks with file ownership."""
 from __future__ import annotations
 
+import statistics
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-import yaml
+from typing import TYPE_CHECKING, Any
 
 from mimiron import SCHEMA_VERSION
+from mimiron import yaml_compat as yaml
+
+if TYPE_CHECKING:
+    from mimiron.thresholds import Thresholds
 
 
 class PlanError(ValueError):
@@ -113,3 +117,78 @@ class Plan:
                         f"{owners[f]} and {t.id}"
                     )
                 owners[f] = t.id
+
+
+def detect_plan_smells(
+    plan: Plan,
+    thresholds: Thresholds,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Compute structural quality smells from a Plan.
+
+    Pure function. No I/O. Does not mutate ``plan``.
+
+    Returns a ``(metrics, smells)`` tuple. ``metrics`` is always populated
+    with ``avg_files_per_task`` (float), ``dag_depth`` (int), and
+    ``reviewer_ratio`` (float). ``smells`` lists every smell whose metric
+    is **strictly greater than** its threshold (boundary values do not fire).
+    """
+    tasks = plan.tasks
+    n = len(tasks)
+
+    if n == 0:
+        metrics: dict[str, Any] = {
+            "avg_files_per_task": 0.0,
+            "dag_depth": 0,
+            "reviewer_ratio": 0.0,
+        }
+        return metrics, []
+
+    avg_files_per_task = float(
+        statistics.mean(len(t.owned_files) for t in tasks)
+    )
+    reviewer_ratio = sum(1 for t in tasks if t.worker == "reviewer") / n
+
+    by_id = {t.id: t for t in tasks}
+    depth_cache: dict[str, int] = {}
+
+    def depth(tid: str) -> int:
+        cached = depth_cache.get(tid)
+        if cached is not None:
+            return cached
+        deps = by_id[tid].depends_on
+        if not deps:
+            d = 1
+        else:
+            d = 1 + max(depth(dep) for dep in deps if dep in by_id)
+        depth_cache[tid] = d
+        return d
+
+    dag_depth = max(depth(t.id) for t in tasks)
+
+    metrics = {
+        "avg_files_per_task": avg_files_per_task,
+        "dag_depth": dag_depth,
+        "reviewer_ratio": reviewer_ratio,
+    }
+
+    smells: list[dict[str, Any]] = []
+    if avg_files_per_task > thresholds.plan_smells_max_avg_files_per_task:
+        smells.append({
+            "name": "avg_files_per_task",
+            "value": avg_files_per_task,
+            "threshold": thresholds.plan_smells_max_avg_files_per_task,
+        })
+    if dag_depth > thresholds.plan_smells_max_dag_depth:
+        smells.append({
+            "name": "dag_depth",
+            "value": dag_depth,
+            "threshold": thresholds.plan_smells_max_dag_depth,
+        })
+    if reviewer_ratio > thresholds.plan_smells_max_reviewer_ratio:
+        smells.append({
+            "name": "reviewer_ratio",
+            "value": reviewer_ratio,
+            "threshold": thresholds.plan_smells_max_reviewer_ratio,
+        })
+
+    return metrics, smells
