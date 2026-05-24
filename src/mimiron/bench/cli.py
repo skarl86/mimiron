@@ -143,6 +143,41 @@ def cmd_suite(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_swebench_import(args: argparse.Namespace) -> int:
+    from mimiron.bench.swebench_import import (
+        ImportError as SwebenchImportError,
+        load_from_jsonl,
+        load_from_huggingface,
+        stratify_instances,
+        write_fixture,
+    )
+
+    if not args.from_jsonl and not args.from_hf:
+        print("error: one of --from-jsonl or --from-hf is required", file=sys.stderr)
+        return 2
+
+    cwd = Path.cwd()
+    try:
+        if args.from_jsonl:
+            insts = load_from_jsonl(Path(args.from_jsonl))
+        else:
+            insts = load_from_huggingface()
+    except (SwebenchImportError, FileNotFoundError) as e:
+        print(f"error: dataset load: {e}", file=sys.stderr)
+        return 2
+
+    sampled = stratify_instances(
+        insts, target=args.stratified, seed=args.seed,
+    )
+    bench_root = cwd / "benchmarks"
+    bench_root.mkdir(parents=True, exist_ok=True)
+    for inst in sampled:
+        d = write_fixture(inst, root=bench_root, clone_root=args.clone_root)
+        print(f"wrote {d.relative_to(cwd)}")
+    print(f"\nimported {len(sampled)} fixtures into {bench_root.relative_to(cwd)}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="mimiron-bench")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -171,6 +206,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_suite = sub.add_parser("suite")
     p_suite.set_defaults(func=cmd_suite)
+
+    p_sb = sub.add_parser("swebench", help="SWE-bench Lite dataset adapter")
+    sb_sub = p_sb.add_subparsers(dest="sb_cmd", required=True)
+
+    p_sb_import = sb_sub.add_parser("import", help="HF or JSONL → benchmarks/SWE-LITE-XX/")
+    p_sb_import.add_argument("--from-jsonl", dest="from_jsonl", default=None,
+                              help="Local JSONL of SWE-bench instances (offline mode).")
+    p_sb_import.add_argument("--from-hf", dest="from_hf", action="store_true",
+                              help="Pull from HuggingFace princeton-nlp/SWE-bench_Lite.")
+    p_sb_import.add_argument("--stratified", type=int, default=20,
+                              help="Number of instances to sample (default 20).")
+    p_sb_import.add_argument("--seed", type=int, default=42,
+                              help="RNG seed for stratified sampling (default 42 → deterministic subset).")
+    p_sb_import.add_argument("--clone-root", default="../../.bench-clones/swebench",
+                              help="Relative repo path written into benchmark.yaml.")
+    p_sb_import.set_defaults(func=cmd_swebench_import)
 
     return p
 
