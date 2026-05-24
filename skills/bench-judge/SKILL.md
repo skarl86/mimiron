@@ -91,9 +91,19 @@ python -m py_compile <changed.py files>
    - `git -C <repo> checkout <base_ref> && git -C <repo> apply --check <actual>` 실행
    - 결과를 `apply_check` 0.0/1.0 으로 기록
 4. 두 diff를 *나란히* 살피며 5-차원 채점 (J5 는 위에서 산출된 값을 그대로 사용).
-5. **median-of-3** 실행 (같은 룰브릭으로 3회 채점, median을 score로):
+5. **median-of-3** 실행 — 3회 채점 (median을 score로), 회차마다 *결정론적 variation seed* 적용 (v0.3.0 #22):
+
+   | 회차 | rubric 순서 | diff 제시 순서 | 추가 강조 | `variation_seed` |
+   |---|---|---|---|---|
+   | 1 | J1 → J2 → J3 → J4 → J5 | expected 먼저 | (없음 — baseline) | `v030-r1-canonical` |
+   | 2 | J3 → J5 → J1 → J4 → J2 | actual 먼저 | (없음) | `v030-r2-shuffle-actual-first` |
+   | 3 | J5 → J2 → J4 → J1 → J3 | expected 먼저 | "회귀 위험을 평소보다 엄격히 보라" | `v030-r3-regression-strict` |
+
    - LLM temperature=0
-   - 3 샘플 모두 기록 (audit용)
+   - 3 샘플 모두 기록 (audit용). 각 샘플이 어떤 seed 로 산출됐는지 `samples_meta` (optional) 에 기록 가능.
+   - 룰브릭 정의 자체는 동일 (J1~J5 weight equal) — variation 은 *제시 순서* 와 *어디에 강조점을 두는지* 만 바뀜.
+
+   ⚠️ **variation 의 의미**: deterministic temperature=0 모델에서 단순 순서 변경은 분산을 거의 만들지 않을 수 있음. 회차 3 의 강조 (regression strict) 가 분산 생성의 주 동력. 실제 분산이 작게 나오면 그것 자체가 *시그널* — judge 가 robust 하다는 뜻 또는 prompt-induced agreement 가 여전히 강하다는 뜻 (해석은 dogfood 가 분리).
 6. **Certainty label** 산출 (4-label, v0.3.0 #23 신설):
 
    | 조건 | label | 의미 |
