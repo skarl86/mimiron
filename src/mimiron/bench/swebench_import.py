@@ -10,6 +10,10 @@ from typing import Any
 from mimiron import yaml_compat as yaml
 
 
+class ImportError(ValueError):  # noqa: A001 — intentional module-scope shadow of builtin
+    """SWE-bench import 오류."""
+
+
 @dataclass(frozen=True)
 class InstanceFeatures:
     patch_bytes: int
@@ -165,3 +169,37 @@ def write_fixture(
     )
 
     return fixture_dir
+
+
+_REQUIRED = ("instance_id", "repo", "base_commit", "problem_statement", "patch")
+
+
+def load_from_jsonl(path: Path) -> list[dict[str, Any]]:
+    """로컬 JSONL → instance dict 리스트. HF 의존성 없음."""
+    out: list[dict[str, Any]] = []
+    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = _json.loads(line)
+        except _json.JSONDecodeError as e:
+            raise ImportError(f"line {n}: invalid JSON: {e}") from e
+        missing = [k for k in _REQUIRED if k not in rec]
+        if missing:
+            raise ImportError(f"line {n}: missing required fields {missing}")
+        out.append(rec)
+    return out
+
+
+def load_from_huggingface(subset: str = "test") -> list[dict[str, Any]]:
+    """HF datasets 의존성 lazy import. PoC 외 사용자가 직접 부를 때만."""
+    try:
+        from datasets import load_dataset  # type: ignore[import-not-found]
+    except ModuleNotFoundError as e:
+        raise ImportError(
+            "HuggingFace `datasets` not installed. "
+            "Install: `uv pip install -e '.[swebench]'` or use --from-jsonl <path>"
+        ) from e
+    ds = load_dataset("princeton-nlp/SWE-bench_Lite", split=subset)
+    return [dict(x) for x in ds]

@@ -1,6 +1,10 @@
 """SWE-bench importer unit tests."""
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
+
 from mimiron.bench.swebench_import import (
     InstanceFeatures,
     compute_features,
@@ -123,3 +127,20 @@ def test_write_fixture_handles_hyphenated_org_name(tmp_path):
     assert written.name == "SWE-LITE-sphinx-doc__sphinx-9000"
     y = yaml.safe_load((written / "benchmark.yaml").read_text())
     assert y["repo"] == "../../.clones/sphinx-doc__sphinx"
+
+
+def test_load_from_jsonl_reads_all_records():
+    from mimiron.bench.swebench_import import load_from_jsonl
+    p = Path(__file__).parent.parent / "fixtures" / "swebench_sample.jsonl"
+    insts = load_from_jsonl(p)
+    assert len(insts) == 3
+    assert insts[0]["instance_id"] == "django__django-11099"
+    assert insts[2]["repo"] == "astropy/astropy"
+
+
+def test_load_from_jsonl_raises_on_missing_required_field(tmp_path):
+    from mimiron.bench.swebench_import import load_from_jsonl, ImportError as IE
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text('{"instance_id": "x"}\n', encoding="utf-8")
+    with pytest.raises(IE):
+        load_from_jsonl(bad)
