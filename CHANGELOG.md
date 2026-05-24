@@ -63,6 +63,7 @@ Plus `unstuck` as the personified safety mechanism — human-in-the-loop recover
 ## [Unreleased] — toward v0.3.0
 
 - `benchmarks/_CURATION_GUIDE.md` — 5-rule guide for `issue.md` root-cause hint level + B01 retroactive signal boost (#25)
+- bench-judge: J5 (apply-check) dimension — `git apply --check` against base_ref as deterministic 5th rubric, optional `apply_check` JSON field, backward-compat fallback to 4-dim mean (#21)
 
 ## [v0.2.0] — 2026-05-24 — **Bench foundation**
 

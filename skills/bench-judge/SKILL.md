@@ -32,32 +32,71 @@ description: Mimiron self-eval 루프의 *판정자(judge)*. Mimiron이 만든 d
     "score": 0.0~1.0,
     "rationale": "<200자 미만 정리>",
     "samples": [s1, s2, s3],
+    "apply_check": 0.0 | 1.0,
     "ts": "<ISO8601>"
   }
   ```
-  (현 v0 schema는 `score`만 필수. `samples`/`rationale`/`ts`는 future-compat optional.)
+  (현 schema는 `score`만 필수. `samples`/`rationale`/`apply_check`/`ts`는 optional — 없으면 4-차원 fallback 으로 해석.)
 
-## 점수 룰브릭 (4 차원, 각 0~1, *동일 가중치 평균*)
+## 점수 룰브릭 (5 차원, 각 0~1, *동일 가중치 평균*)
 
 1. **J1 — 변경 위치 일치도**: actual diff의 파일/함수가 expected와 같은가
 2. **J2 — 변경 의미 일치도**: 추가/삭제/수정의 *기능적 효과*가 같은가 (이름/주석은 무관)
 3. **J3 — 회귀 위험**: actual이 expected가 *건드리지 않은* 영역을 손댔는가 (많을수록 점수 ↓)
 4. **J4 — 완결성**: acceptance criteria의 *모든* 항목이 actual에서 만족되는가
+5. **J5 — Applicability** *(v0.3.0 신설)*: actual diff 가 base_ref 워크트리에 *적용 가능* 한가. 0/1 binary.
 
-`score = (J1 + J2 + J3 + J4) / 4`
+`score = (J1 + J2 + J3 + J4 + J5) / 5`
+
+> **Backward-compat fallback**: judge JSON 에 `apply_check` 필드가 *없으면* (v0.2.0 이전 산출물) 4-차원 평균 `(J1+J2+J3+J4)/4` 로 해석. 이 fallback 은 *읽기 호환성* 만 — 신규 채점은 반드시 J5 포함.
+
+### J5 산출 — 가벼운 형태 (기본)
+
+```bash
+git -C <repo> checkout <base_ref>
+git -C <repo> apply --check <candidate.diff>
+```
+
+- exit 0 → **J5 = 1.0** (`apply_check: 1.0`)
+- non-zero (corrupt patch / context mismatch / 미존재 파일 등) → **J5 = 0.0** (`apply_check: 0.0`)
+
+이 형태는 *catastrophic 수준의 부적용 candidate* (hand-edited 또는 LLM-generated diff 에서 흔한 hunk 카운트 깨짐, 잘못된 base 가정 등) 를 잡는다. 가장 가볍고 결정론적.
+
+### J5 산출 — 강한 형태 (opt-in, `--strong-applicability` 플래그)
+
+apply --check 통과 + 추가로 변경된 *.py 파일들의 syntactic validity 검사:
+
+```bash
+git -C <repo> apply <candidate.diff>
+python -m py_compile <changed.py files>
+```
+
+- 모든 .py 통과 → J5 = 1.0
+- 임의 1개 syntax error → J5 = 0.0
+
+⚠️ **알려진 한계**: Python NameError / AttributeError 같은 *runtime* 결함은 py_compile 이 잡지 못한다 (bytecode 컴파일은 name resolution 을 하지 않음). 이런 catastrophic-but-syntactically-valid candidate 는 J5 로 detection 불가 — `bench_score` 산식 차원 (#20) 에서 *candidate-applied test_command* 로 보완.
+
+### J5 와 다른 차원의 관계
+
+- J5 = 0.0 이면 J1~J4 채점은 *그래도* 진행 (LLM 은 diff 텍스트만으로 채점 가능). 다만 rationale 에 "apply_check failed — runtime semantics 추정 불가" 명시.
+- J5 = 1.0 이 J1~J4 의 *상한선* 을 의미하지 않음. apply 되더라도 의미가 완전히 어긋날 수 있음 (B02 케이스).
 
 ## 흐름
 
 1. `benchmarks/<id>/expected.diff` 읽기.
 2. actual diff 위치 결정 (위 진입조건 우선순위).
-3. 두 diff를 *나란히* 살피며 4-차원 채점.
-4. **median-of-3** 실행 (같은 룰브릭으로 3회 채점, median을 score로):
+3. **J5 (apply-check) 먼저 산출** (deterministic, LLM 호출 없음):
+   - benchmark.yaml 에서 `repo` 와 `base_ref` 추출
+   - `git -C <repo> checkout <base_ref> && git -C <repo> apply --check <actual>` 실행
+   - 결과를 `apply_check` 0.0/1.0 으로 기록
+4. 두 diff를 *나란히* 살피며 5-차원 채점 (J5 는 위에서 산출된 값을 그대로 사용).
+5. **median-of-3** 실행 (같은 룰브릭으로 3회 채점, median을 score로):
    - LLM temperature=0
    - 3 샘플 모두 기록 (audit용)
-5. **Certainty band** check: 3 샘플의 *최대-최소* 가 0.15를 초과하면 *uncertain*로
+6. **Certainty band** check: 3 샘플의 *최대-최소* 가 0.15를 초과하면 *uncertain*로
    판정 → score는 median을 유지하되 `rationale`에 "uncertain — spread 0.X"를 명시.
-6. `.mimiron/_outer/judge/<bench_id>.json` 작성 (atomic — 임시 파일에 write 후 rename).
-7. 사용자에게 한 줄 보고:
+7. `.mimiron/_outer/judge/<bench_id>.json` 작성 (atomic — 임시 파일에 write 후 rename).
+8. 사용자에게 한 줄 보고:
    ```
    judge <id>: score=0.XX (samples [.X, .X, .X], spread .Y). 
    → mimiron-bench run <id> --similarity-from <path>
@@ -77,9 +116,10 @@ description: Mimiron self-eval 루프의 *판정자(judge)*. Mimiron이 만든 d
 
 ```json
 {
-  "score": 0.82,
-  "rationale": "J1=1.0(같은 파일), J2=0.8(같은 효과, 이름 다름), J3=0.7(불필요한 import 추가), J4=0.8(criteria 4/5 만족). median-of-3 from [0.80, 0.82, 0.85], spread 0.05 (certain).",
-  "samples": [0.80, 0.82, 0.85],
+  "score": 0.86,
+  "rationale": "J1=1.0(같은 파일), J2=0.8(같은 효과, 이름 다름), J3=0.7(불필요한 import 추가), J4=0.8(criteria 4/5 만족), J5=1.0(apply-check pass). median-of-3 from [0.84, 0.86, 0.88], spread 0.04 (certain).",
+  "samples": [0.84, 0.86, 0.88],
+  "apply_check": 1.0,
   "ts": "2026-05-23T12:34:56Z"
 }
 ```
